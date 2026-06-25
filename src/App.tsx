@@ -77,8 +77,17 @@ const views: Array<{ id: View; label: string; icon: any }> = [
 
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
 const PARTIES_KEY = "msg-fiscal-parties";
+const FISCAL_CONFIG_KEY = "msg-fiscal-config";
 const unitOptions = ["UN", "KG", "TN", "MT", "PC"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
+type UserRole = "Administrador" | "Consulta" | "Diretoria";
+type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">;
+
+const users: Record<UserRole, string> = {
+  Administrador: "AdministradorMSG2026",
+  Consulta: "ConsultaMSG",
+  Diretoria: "DiretoriaMSG2026",
+};
 
 const readLocal = <T,>(key: string, fallback: T): T => {
   try {
@@ -88,6 +97,39 @@ const readLocal = <T,>(key: string, fallback: T): T => {
     return fallback;
   }
 };
+
+const fiscalConfigSnapshot = (): FiscalConfig => ({
+  ...fiscalConfig,
+  cfops: [...fiscalConfig.cfops],
+  csts: [...fiscalConfig.csts],
+  ncms: [...fiscalConfig.ncms],
+  categories: [...fiscalConfig.categories],
+  costCenters: [...fiscalConfig.costCenters],
+  linkedTypes: [...fiscalConfig.linkedTypes],
+  units: [...(fiscalConfig.units || unitOptions)],
+});
+
+const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
+  fiscalConfig.icmsRate = Number(nextConfig.icmsRate ?? fiscalConfig.icmsRate);
+  fiscalConfig.pisRate = Number(nextConfig.pisRate ?? fiscalConfig.pisRate);
+  fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
+  fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
+  fiscalConfig.cfops = [...(nextConfig.cfops || fiscalConfig.cfops)];
+  fiscalConfig.csts = [...(nextConfig.csts || fiscalConfig.csts)];
+  fiscalConfig.ncms = [...(nextConfig.ncms || fiscalConfig.ncms)];
+  fiscalConfig.categories = [...(nextConfig.categories || fiscalConfig.categories)];
+  fiscalConfig.costCenters = [...(nextConfig.costCenters || fiscalConfig.costCenters)];
+  fiscalConfig.linkedTypes = [...(nextConfig.linkedTypes || fiscalConfig.linkedTypes)];
+  fiscalConfig.units = [...(nextConfig.units || fiscalConfig.units || unitOptions)];
+};
+
+const saveFiscalConfig = () => {
+  localStorage.setItem(FISCAL_CONFIG_KEY, JSON.stringify(fiscalConfigSnapshot()));
+};
+
+applyFiscalConfig(readLocal<Partial<FiscalConfig>>(FISCAL_CONFIG_KEY, {}));
+
+const onlyDigits = (value?: string | number) => String(value ?? "").replace(/\D/g, "");
 
 const cleanNumber = (value: FormDataEntryValue | null) => {
   const raw = String(value || "0").trim();
@@ -108,6 +150,18 @@ const exportRows = (rows: Record<string, unknown>[], filename: string) => {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Dados");
   XLSX.writeFile(workbook, `${filename}.xlsx`);
+};
+
+const exportCsv = (rows: Record<string, unknown>[], filename: string) => {
+  const worksheet = XLSX.utils.json_to_sheet(rows);
+  const csv = XLSX.utils.sheet_to_csv(worksheet);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${filename}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
 };
 
 const formatDate = (value?: string) => {
@@ -134,6 +188,101 @@ const invoiceProductEntries = (invoice: Invoice) => {
     name: productLabel(item),
     value: Number(item.totalValue || invoice.totalInvoice || 0),
   }));
+};
+
+const invoiceDate = (invoice: Invoice) => (invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate);
+const withinDateRange = (date: string | undefined, start: string, end: string) => {
+  if (!date) return false;
+  const value = date.slice(0, 10);
+  if (start && value < start) return false;
+  if (end && value > end) return false;
+  return true;
+};
+
+const normalizeSearch = (value: string) =>
+  value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const isCloseWord = (word: string, term: string) => {
+  if (term.length < 4 || !/[a-z]/.test(term) || Math.abs(word.length - term.length) > 1) return false;
+  let differences = Math.abs(word.length - term.length);
+  const maxLength = Math.max(word.length, term.length);
+
+  for (let index = 0; index < maxLength && differences <= 1; index += 1) {
+    if (word[index] !== term[index]) differences += 1;
+  }
+
+  return differences <= 1;
+};
+
+const searchMatches = (text: string, query: string) => {
+  const haystack = normalizeSearch(text);
+  const terms = normalizeSearch(query).split(/\s+/).filter(Boolean);
+  if (!terms.length) return true;
+  const words = haystack.split(/[^a-z0-9]+/).filter(Boolean);
+  return terms.every((term) => haystack.includes(term) || words.some((word) => isCloseWord(word, term)));
+};
+
+const invoiceSearchText = (invoice: Invoice) =>
+  [
+    invoice.invoiceNumber,
+    invoice.partyName,
+    invoice.partyCnpj,
+    invoice.partyIe,
+    invoice.city,
+    invoice.state,
+    invoice.mainCfop,
+    invoice.natureOperation,
+    invoice.operationType,
+    invoice.status,
+    invoice.carrierName,
+    invoice.accessKey,
+    invoice.xmlFileName,
+    invoice.pdfFileName,
+    invoice.additionalInfo,
+    invoice.internalNotes,
+    invoice.items.map((item) => [
+      item.description,
+      item.ncm,
+      item.cfop,
+      item.category,
+      item.costCenter,
+      item.materialType,
+      item.blockNumber,
+      item.blockColor,
+      item.blockQuality,
+      item.blockMeasures,
+    ].join(" ")).join(" "),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+const operationSearchText = (op: LinkedOperation) =>
+  [
+    op.id,
+    op.operationType,
+    op.mainInvoiceNumber,
+    op.linkedInvoiceNumber,
+    op.supplierName,
+    op.finalRecipientName,
+    op.finalRecipientCnpj,
+    op.physicalReceiverName,
+    op.physicalReceiverCnpj,
+    op.mainCfop,
+    op.linkedCfop,
+    op.mainAccessKey,
+    op.linkedAccessKey,
+    op.amount,
+    op.status,
+    op.notes,
+  ].join(" ");
+
+const operationIdFromInvoices = (mainInvoiceNumber: string, linkedInvoiceNumber: string) => {
+  const main = onlyDigits(mainInvoiceNumber).replace(/^0+/, "");
+  const linked = onlyDigits(linkedInvoiceNumber).replace(/^0+/, "");
+  return main && linked ? `op_${main}_${linked}` : newId("op");
 };
 
 const isTaxableReceivedInvoice = (invoice: Invoice) => {
@@ -368,7 +517,9 @@ function ActionButton({
   );
 }
 
-function Login({ onLogin }: { onLogin: () => void }) {
+function Login({ onLogin }: { onLogin: (role: UserRole) => void }) {
+  const [error, setError] = useState("");
+
   return (
     <main className="login-page">
       <section className="login-panel">
@@ -378,11 +529,30 @@ function Login({ onLogin }: { onLogin: () => void }) {
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            onLogin();
+            const form = new FormData(event.currentTarget);
+            const role = String(form.get("role") || "") as UserRole;
+            const password = String(form.get("password") || "");
+
+            if (users[role] !== password) {
+              setError("Usuário ou senha inválidos.");
+              return;
+            }
+
+            setError("");
+            onLogin(role);
           }}
         >
-          <Field label="E-mail" name="email" type="email" defaultValue="fiscal@msgmineracao.com.br" />
-          <Field label="Senha" name="password" type="password" defaultValue="demo123" />
+          <label className="field">
+            <span>Usuário</span>
+            <select name="role" defaultValue="" required>
+              <option value="">Selecione</option>
+              <option value="Administrador">Administrador</option>
+              <option value="Consulta">Consulta</option>
+              <option value="Diretoria">Diretoria</option>
+            </select>
+          </label>
+          <Field label="Senha" name="password" type="password" required />
+          {error && <p className="form-error">{error}</p>}
           <ActionButton icon={Lock} type="submit">
             Entrar no sistema
           </ActionButton>
@@ -404,11 +574,13 @@ function Dashboard({
   onView: (view: View) => void;
 }) {
   const byCustomer = Object.values(
-    totals.issued.reduce<Record<string, { name: string; value: number }>>((acc, invoice) => {
-      acc[invoice.partyName] ||= { name: invoice.partyName, value: 0 };
-      acc[invoice.partyName].value += invoice.totalInvoice;
-      return acc;
-    }, {}),
+    totals.issued
+      .filter((invoice) => invoice.mainCfop === "5101")
+      .reduce<Record<string, { name: string; value: number }>>((acc, invoice) => {
+        acc[invoice.partyName] ||= { name: invoice.partyName, value: 0 };
+        acc[invoice.partyName].value += invoice.totalInvoice;
+        return acc;
+      }, {}),
   );
   const byProduct = Object.values(
     totals.issued
@@ -580,7 +752,7 @@ function InvoiceRows({
           <th>ICMS</th>
           <th>Triang.</th>
           <th>Status</th>
-          {actions && <th>Acoes</th>}
+          {actions && <th>Ações</th>}
         </tr>
       </thead>
       <tbody>
@@ -594,7 +766,7 @@ function InvoiceRows({
             <td>{formatCurrency(invoice.totalInvoice)}</td>
             {showPfValue && <td>{invoice.invoiceType === "issued" ? formatCurrency(invoice.pfValue || 0) : "-"}</td>}
             <td>{formatCurrency(invoice.invoiceType === "received" ? invoice.icmsCreditValue : invoice.icmsValue)}</td>
-            <td>{invoice.hasLinkedOperation ? "Sim" : "Nao"}</td>
+            <td>{invoice.hasLinkedOperation ? "Sim" : "Não"}</td>
             <td>
               <Badge value={invoice.status} />
             </td>
@@ -611,21 +783,21 @@ function OperationRows({ operations, actions }: { operations: LinkedOperation[];
     <table>
       <thead>
         <tr>
-          <th>ID</th>
+          <th>Notas vinculadas</th>
           <th>Tipo</th>
           <th>Nota principal</th>
           <th>Nota vinculada</th>
           <th>Fornecedor</th>
-          <th>Destinatario final</th>
+          <th>Destinatário final</th>
           <th>Valor</th>
           <th>Status</th>
-          {actions && <th>Acoes</th>}
+          {actions && <th>Ações</th>}
         </tr>
       </thead>
       <tbody>
         {operations.map((op) => (
           <tr key={op.id}>
-            <td>{op.id.replace("op_", "")}</td>
+            <td>{[op.mainInvoiceNumber, op.linkedInvoiceNumber].filter(Boolean).join(" / ")}</td>
             <td>{op.operationType}</td>
             <td>{op.mainInvoiceNumber}</td>
             <td>{op.linkedInvoiceNumber}</td>
@@ -718,6 +890,7 @@ function InvoiceList({
   onPaid,
   onDelete,
   onOpen,
+  canEdit,
 }: {
   type: InvoiceType;
   invoices: Invoice[];
@@ -725,18 +898,17 @@ function InvoiceList({
   onPaid: (invoice: Invoice) => void;
   onDelete: (id: string) => void;
   onOpen: (invoice: Invoice) => void;
+  canEdit: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [cfop, setCfop] = useState("");
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
   const [linkedOnly, setLinkedOnly] = useState(false);
   const filtered = invoices
     .filter((invoice) => invoice.invoiceType === type)
-    .filter((invoice) =>
-      [invoice.invoiceNumber, invoice.partyName, invoice.partyCnpj, invoice.mainCfop, invoice.items[0]?.ncm]
-        .join(" ")
-        .toLowerCase()
-        .includes(query.toLowerCase()),
-    )
+    .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
+    .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd))
     .filter((invoice) => (!cfop ? true : invoice.mainCfop === cfop))
     .filter((invoice) => (!linkedOnly ? true : invoice.hasLinkedOperation));
 
@@ -747,6 +919,14 @@ function InvoiceList({
           <label className="field">
             <span>Busca geral</span>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Número, CNPJ, CFOP, NCM..." />
+          </label>
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
           </label>
           <label className="field">
             <span>CFOP</span>
@@ -766,9 +946,11 @@ function InvoiceList({
             </label>
           )}
         </div>
-        <ActionButton icon={Plus} onClick={onNew}>
-          Nova nota
-        </ActionButton>
+        {canEdit && (
+          <ActionButton icon={Plus} onClick={onNew}>
+            Nova nota
+          </ActionButton>
+        )}
       </div>
       <section className="panel">
         <div className="panel-title between">
@@ -806,25 +988,29 @@ function InvoiceList({
                 <button className="icon-btn" title="Visualizar" onClick={() => onOpen(invoice)}>
                   <Search size={16} />
                 </button>
-                {type === "received" && !invoice.paid && (
+                {canEdit && type === "received" && !invoice.paid && (
                   <button className="icon-btn" title="Marcar como paga" onClick={() => window.confirm("Tem certeza que deseja marcar esta nota como paga?") && onPaid(invoice)}>
                     <CheckCircle2 size={16} />
                   </button>
                 )}
-                <button
-                  className="icon-btn"
-                  title="Editar lançamento"
-                  onClick={() => {
-                    if (window.confirm("Tem certeza que deseja editar este lançamento?")) {
-                      onOpen(invoice);
-                    }
-                  }}
-                >
-                  <Pencil size={16} />
-                </button>
-                <button className="icon-btn danger" title="Excluir" onClick={() => window.confirm("Tem certeza que deseja excluir este lançamento?") && onDelete(invoice.id)}>
-                  <X size={16} />
-                </button>
+                {canEdit && (
+                  <>
+                    <button
+                      className="icon-btn"
+                      title="Editar lançamento"
+                      onClick={() => {
+                        if (window.confirm("Tem certeza que deseja editar este lançamento?")) {
+                          onOpen(invoice);
+                        }
+                      }}
+                    >
+                      <Pencil size={16} />
+                    </button>
+                    <button className="icon-btn danger" title="Excluir" onClick={() => window.confirm("Tem certeza que deseja excluir este lançamento?") && onDelete(invoice.id)}>
+                      <X size={16} />
+                    </button>
+                  </>
+                )}
               </div>
             )}
           />
@@ -837,8 +1023,10 @@ function InvoiceList({
 function InvoiceForm({
   type,
   invoices,
+  operations,
   parties,
   editingInvoice,
+  canEdit = true,
   onSave,
   onDelete,
   onOperation,
@@ -846,8 +1034,10 @@ function InvoiceForm({
 }: {
   type: InvoiceType;
   invoices: Invoice[];
+  operations: LinkedOperation[];
   parties: Party[];
   editingInvoice?: Invoice | null;
+  canEdit?: boolean;
   onSave: (invoice: Invoice) => void;
   onDelete?: (id: string) => void;
   onOperation: (operation: LinkedOperation) => void;
@@ -868,6 +1058,7 @@ function InvoiceForm({
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canEdit) return;
     if (isEditing && !window.confirm("Tem certeza que deseja salvar as alterações deste lançamento?")) return;
     const form = new FormData(event.currentTarget);
     const mainCfop = String(form.get("mainCfop") || "");
@@ -952,14 +1143,22 @@ function InvoiceForm({
     onSave(invoice);
 
     if (hasLinkedOperation) {
+      const linkedInvoiceNumber = String(form.get("linkedInvoiceNumber") || "");
+      const existingOperation = operations.find(
+        (operation) =>
+          operation.mainInvoiceId === invoice.id ||
+          operation.mainInvoiceNumber === invoice.invoiceNumber ||
+          operation.id === operationIdFromInvoices(invoice.invoiceNumber, linkedInvoiceNumber),
+      );
+
       onOperation({
-        id: newId("op"),
+        id: existingOperation?.id || operationIdFromInvoices(invoice.invoiceNumber, linkedInvoiceNumber),
         companyId: "msg",
         operationType: invoice.linkedOperationType || "Compra com triangulação",
         mainInvoiceId: invoice.id,
-        linkedInvoiceId: invoices.find((candidate) => candidate.invoiceNumber === invoice.linkedInvoiceNumber)?.id,
+        linkedInvoiceId: invoices.find((candidate) => candidate.invoiceNumber === linkedInvoiceNumber)?.id,
         mainInvoiceNumber: invoice.invoiceNumber,
-        linkedInvoiceNumber: invoice.linkedInvoiceNumber || "",
+        linkedInvoiceNumber,
         supplierName: invoice.partyName,
         finalRecipientName: invoice.finalRecipientName || "",
         finalRecipientCnpj: String(form.get("finalRecipientCnpj") || ""),
@@ -973,7 +1172,7 @@ function InvoiceForm({
         amount: cleanNumber(form.get("linkedAmount")) || invoice.totalInvoice,
         status: String(form.get("linkedStatus") || "Aberta") as LinkedOperation["status"],
         notes: String(form.get("linkedNotes") || ""),
-        createdAt: now,
+        createdAt: existingOperation?.createdAt || now,
         updatedAt: now,
       });
     }
@@ -983,13 +1182,14 @@ function InvoiceForm({
 
   return (
     <form className="view-stack" onSubmit={submit}>
+      <fieldset disabled={!canEdit} className="form-fieldset">
       <section className="panel">
         <div className="panel-title between">
           <div className="panel-title">
             <Files size={20} />
             <h2>{isEditing ? "Alterar lançamento" : isReceived ? "Nova Nota Recebida" : "Nova Nota Emitida"}</h2>
           </div>
-          {isEditing && onDelete && (
+          {isEditing && canEdit && onDelete && (
             <button
               className="btn danger"
               type="button"
@@ -1005,8 +1205,8 @@ function InvoiceForm({
           )}
         </div>
         <div className="form-grid">
-          <Field label={isReceived ? "Data de emissao fornecedor" : "Data de emissao"} name="issueDate" type="date" defaultValue={editingInvoice?.issueDate || todayIso()} required />
-          <Field label="Número da nota" name="invoiceNumber" defaultValue={(editingInvoice?.invoiceNumber || "").replace(/\D/g, "")} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+          <Field label={isReceived ? "Data de emissão fornecedor" : "Data de emissão"} name="issueDate" type="date" defaultValue={editingInvoice?.issueDate || todayIso()} required />
+          <Field label="Número da nota" name="invoiceNumber" defaultValue={onlyDigits(editingInvoice?.invoiceNumber)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
           <PartySelect
             label={isReceived ? "Fornecedor" : "Cliente"}
             name="partyId"
@@ -1036,20 +1236,22 @@ function InvoiceForm({
       <section className="panel">
         <div className="panel-title between">
           <h2>Itens da Nota</h2>
-          <ActionButton
-            icon={Plus}
-            variant="ghost"
-            onClick={() => setItemIndexes((current) => [...current, Math.max(...current) + 1])}
-          >
-            Adicionar item
-          </ActionButton>
+          {canEdit && (
+            <ActionButton
+              icon={Plus}
+              variant="ghost"
+              onClick={() => setItemIndexes((current) => [...current, Math.max(...current) + 1])}
+            >
+              Adicionar item
+            </ActionButton>
+          )}
         </div>
         <div className="items-stack">
           {itemIndexes.map((itemIndex, position) => (
             <article className="item-card" key={itemIndex}>
               <div className="panel-title between">
                 <h3>Item {position + 1}</h3>
-                {itemIndexes.length > 1 && (
+                {canEdit && itemIndexes.length > 1 && (
                   <button
                     className="icon-btn danger"
                     title="Remover item"
@@ -1061,13 +1263,13 @@ function InvoiceForm({
                 )}
               </div>
               <div className="form-grid">
-                <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.description || ""} required sanitize="letters" pattern="[A-Za-zÀ-ÿ\\s]*" />
+                <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.description || ""} required sanitize="letters" />
                 {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={editingInvoice?.items[position]?.category || ""} />}
                 {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={editingInvoice?.items[position]?.costCenter || ""} />}
-                <Field label="NCM" name={`ncm_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.ncm || ""} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                <Field label="NCM" name={`ncm_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.ncm)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
                 <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={editingInvoice?.items[position]?.cstIcms || ""} />
                 <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={editingInvoice?.items[position]?.unit || "UN"} />
-                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.quantity || "1"} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
                 <MoneyField label="Valor unitario" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.unitValue || 0)} />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.totalValue || 0)} />
                 <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsBase || 0)} />
@@ -1078,26 +1280,26 @@ function InvoiceForm({
                 <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisValue || 0)} />
                 <Field label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} type="number" defaultValue={editingInvoice?.items[position]?.cofinsRate || fiscalConfig.cofinsRate} />
                 <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.cofinsValue || 0)} />
-                {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.materialType || ""} sanitize="letters" pattern="[A-Za-zÀ-ÿ\\s]*" />}
-                {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockNumber || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
-                {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockColor || ""} sanitize="letters" pattern="[A-Za-zÀ-ÿ\\s]*" />}
+                {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.materialType || ""} sanitize="letters" />}
+                {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.blockNumber)} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
+                {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockColor || ""} sanitize="letters" />}
                 {!isReceived && <Field label="Qualidade do bloco" name={`blockQuality_${itemIndex}`} options={blockQualityOptions} defaultValue={editingInvoice?.items[position]?.blockQuality || ""} />}
-                {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockMeasures || ""} placeholder="1,50x2,00x10,50m" />}
+                {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockMeasures || ""} />}
                 {!isReceived && <Field label="KG" name={`kilograms_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.kilograms || "0"} inputMode="decimal" sanitize="kg" placeholder="17.310,50" />}
               </div>
               {isReceived && (
                 <div className="check-row">
                   <label className="check">
                     <input name={`icmsCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    ICMS creditavel
+                    ICMS creditável
                   </label>
                   <label className="check">
                     <input name={`pisCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    PIS creditavel
+                    PIS creditável
                   </label>
                   <label className="check">
                     <input name={`cofinsCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    COFINS creditavel
+                    COFINS creditável
                   </label>
                 </div>
               )}
@@ -1162,12 +1364,12 @@ function InvoiceForm({
                 <Field label="Nota vinculada" name="linkedInvoiceNumber" defaultValue={editingInvoice?.linkedInvoiceNumber || ""} />
                 <Field label="Chave nota vinculada" name="linkedAccessKey" />
                 <Field label="CFOP nota vinculada" name="linkedCfop" defaultValue="5923" />
-                <Field label="Destinatario final" name="finalRecipientName" defaultValue={editingInvoice?.finalRecipientName || ""} />
+                <Field label="Destinatário final" name="finalRecipientName" defaultValue={editingInvoice?.finalRecipientName || ""} />
                 <Field label="CNPJ destinatario final" name="finalRecipientCnpj" />
-                <Field label="Data da operacao" name="operationDate" type="date" defaultValue={todayIso()} />
+                <Field label="Data da operação" name="operationDate" type="date" defaultValue={todayIso()} />
                 <MoneyField label="Valor vinculado" name="linkedAmount" defaultValue={formatCurrency(editingInvoice?.totalInvoice || 0)} />
               <label className="field">
-                <span>Status da operacao</span>
+                <span>Status da operação</span>
                 <select name="linkedStatus" defaultValue="Aberta">
                   {["Aberta", "Finalizada", "Parcialmente vinculada", "Pendente de XML", "Pendente de conferência", "Cancelada"].map((status) => (
                     <option key={status}>{status}</option>
@@ -1179,12 +1381,15 @@ function InvoiceForm({
           )}
         </section>
       )}
+      </fieldset>
 
-      <div className="form-actions">
-        <ActionButton icon={Save} type="submit">
-          {isEditing ? "Salvar alterações" : "Salvar nota"}
-        </ActionButton>
-      </div>
+      {canEdit && (
+        <div className="form-actions">
+          <ActionButton icon={Save} type="submit">
+            {isEditing ? "Salvar alterações" : "Salvar nota"}
+          </ActionButton>
+        </div>
+      )}
     </form>
   );
 }
@@ -1193,18 +1398,22 @@ function LinkedOperationsView({
   operations,
   onSave,
   onDelete,
+  canEdit,
 }: {
   operations: LinkedOperation[];
   onSave: (op: LinkedOperation) => void;
   onDelete: (id: string) => void;
+  canEdit: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const filtered = operations.filter((op) =>
-    [op.operationType, op.mainInvoiceNumber, op.linkedInvoiceNumber, op.supplierName, op.finalRecipientName, op.status]
-      .join(" ")
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
+  const filtered = operations.filter((op) => searchMatches(operationSearchText(op), query));
+  const editOperation = (op: LinkedOperation) => {
+    if (!window.confirm("Tem certeza que deseja editar esta operação vinculada?")) return;
+    const nextStatus = window.prompt("Informe o status da operação:", op.status)?.trim();
+    if (!nextStatus) return;
+    const nextNotes = window.prompt("Informe as observações da operação:", op.notes)?.trim() ?? op.notes;
+    onSave({ ...op, status: nextStatus as LinkedOperation["status"], notes: nextNotes, updatedAt: new Date().toISOString() });
+  };
 
   return (
     <div className="view-stack">
@@ -1225,9 +1434,18 @@ function LinkedOperationsView({
         <div className="table-wrap">
           <OperationRows
             operations={filtered}
-            actions={(op) => (
+            actions={
+              canEdit
+                ? (op) => (
               <div className="row-actions">
-                <button className="icon-btn" title="Finalizar" onClick={() => onSave({ ...op, status: "Finalizada", updatedAt: new Date().toISOString() })}>
+                <button
+                  className="icon-btn"
+                  title="Finalizar"
+                  onClick={() =>
+                    window.confirm("Tem certeza que deseja finalizar esta operação vinculada?") &&
+                    onSave({ ...op, status: "Finalizada", updatedAt: new Date().toISOString() })
+                  }
+                >
                   <CheckCircle2 size={16} />
                 </button>
                 <button
@@ -1243,10 +1461,7 @@ function LinkedOperationsView({
                 <button
                   className="icon-btn"
                   title="Editar"
-                  onClick={() =>
-                    window.confirm("Tem certeza que deseja editar esta operação vinculada?") &&
-                    onSave({ ...op, updatedAt: new Date().toISOString() })
-                  }
+                  onClick={() => editOperation(op)}
                 >
                   <Pencil size={16} />
                 </button>
@@ -1254,7 +1469,9 @@ function LinkedOperationsView({
                   <X size={16} />
                 </button>
               </div>
-            )}
+                )
+                : undefined
+            }
           />
         </div>
       </section>
@@ -1264,30 +1481,40 @@ function LinkedOperationsView({
 
 function SearchView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
   const [query, setQuery] = useState("");
-  const rows = invoices.filter((invoice) =>
-    [invoice.invoiceNumber, invoice.partyName, invoice.partyCnpj, invoice.mainCfop, invoice.natureOperation, invoice.status, invoice.items[0]?.description]
-      .join(" ")
-      .toLowerCase()
-      .includes(query.toLowerCase()),
-  );
+  const [dateStart, setDateStart] = useState("");
+  const [dateEnd, setDateEnd] = useState("");
+  const rows = invoices
+    .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
+    .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd));
+  const operationRows = operations.filter((op) => searchMatches(operationSearchText(op), query) && withinDateRange(op.operationDate, dateStart, dateEnd));
 
   return (
     <div className="view-stack">
       <section className="panel">
-        <div className="toolbar flat">
-          <label className="field wide">
-            <span>Consulta fiscal avancada</span>
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Periodo, tipo, cliente, fornecedor, CNPJ, NCM, CFOP, chave, status..." />
-          </label>
+        <div className="toolbar">
+          <div className="filters">
+            <label className="field wide">
+              <span>Consulta fiscal avançada</span>
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Período, tipo, cliente, fornecedor, CNPJ, NCM, CFOP, chave, status..." />
+            </label>
+            <label className="field">
+              <span>Data inicial</span>
+              <input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Data final</span>
+              <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
+            </label>
+          </div>
         </div>
         <div className="table-wrap">
           <InvoiceRows invoices={rows} />
         </div>
       </section>
       <section className="panel">
-        <h2>Operações encontradas</h2>
+        <h2>Operações Vinculadas</h2>
         <div className="table-wrap">
-          <OperationRows operations={operations.filter((op) => JSON.stringify(op).toLowerCase().includes(query.toLowerCase()))} />
+          <OperationRows operations={operationRows} />
         </div>
       </section>
     </div>
@@ -1438,8 +1665,8 @@ function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations
             <h3>{report}</h3>
             <div className="report-actions">
               <button onClick={() => exportRows(invoices as unknown as Record<string, unknown>[], report.toLowerCase().replaceAll(" ", "-"))}>Excel</button>
-              <button onClick={() => exportRows(operations as unknown as Record<string, unknown>[], "operacoes")}>CSV</button>
-              <button>PDF</button>
+              <button onClick={() => exportCsv(operations as unknown as Record<string, unknown>[], "operacoes")}>CSV</button>
+              <button onClick={() => window.print()}>PDF</button>
             </div>
           </article>
         ))}
@@ -1451,9 +1678,11 @@ function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations
 function RegistrationsView({
   registryParties,
   setRegistryParties,
+  canEdit,
 }: {
   registryParties: Party[];
   setRegistryParties: (value: Party[] | ((current: Party[]) => Party[])) => void;
+  canEdit: boolean;
 }) {
   const [showAdd, setShowAdd] = useState(false);
   const [addKind, setAddKind] = useState<Party["kind"]>("customer");
@@ -1489,10 +1718,12 @@ function RegistrationsView({
           <h2>Cadastros</h2>
           <p className="muted">Clientes, fornecedores e transportadoras usados nas notas fiscais.</p>
         </div>
-        <button className="add-card" type="button" onClick={() => setShowAdd((current) => !current)}>
-          <Plus size={22} />
-          <strong>Adicionar</strong>
-        </button>
+        {canEdit && (
+          <button className="add-card" type="button" onClick={() => setShowAdd((current) => !current)}>
+            <Plus size={22} />
+            <strong>Adicionar</strong>
+          </button>
+        )}
       </section>
 
       {showAdd && (
@@ -1541,7 +1772,7 @@ function RegistrationsView({
                   <th>Telefone</th>
                   <th>E-mail</th>
                   <th>Ativo</th>
-                  <th>Ações</th>
+                  {canEdit && <th>Ações</th>}
                 </tr>
               </thead>
               <tbody>
@@ -1556,7 +1787,8 @@ function RegistrationsView({
                       <td>{party.state}</td>
                       <td>{party.phone}</td>
                       <td>{party.email}</td>
-                      <td>{party.active ? "Sim" : "Nao"}</td>
+                      <td>{party.active ? "Sim" : "Não"}</td>
+                      {canEdit && (
                       <td>
                         <div className="row-actions">
                           <button
@@ -1583,6 +1815,7 @@ function RegistrationsView({
                           </button>
                         </div>
                       </td>
+                      )}
                     </tr>
                   ))}
               </tbody>
@@ -1594,70 +1827,57 @@ function RegistrationsView({
   );
 }
 
-function SettingsView({ syncMode }: { syncMode: string }) {
+function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolean }) {
   const [showEditor, setShowEditor] = useState(false);
-  const [configSnapshot, setConfigSnapshot] = useState<FiscalConfig>({
-    ...fiscalConfig,
-    cfops: [...fiscalConfig.cfops],
-    csts: [...fiscalConfig.csts],
-    ncms: [...fiscalConfig.ncms],
-    categories: [...fiscalConfig.categories],
-    costCenters: [...fiscalConfig.costCenters],
-    linkedTypes: [...fiscalConfig.linkedTypes],
-    units: [...(fiscalConfig.units || unitOptions)],
-  });
+  const [selectedConfigList, setSelectedConfigList] = useState<FiscalConfigListName>("cfops");
+  const [configItemValue, setConfigItemValue] = useState("");
+  const [editingConfigItem, setEditingConfigItem] = useState<{
+    listName: FiscalConfigListName;
+    itemValue: string;
+  } | null>(null);
+  const [configSnapshot, setConfigSnapshot] = useState<FiscalConfig>(fiscalConfigSnapshot());
 
   function refreshConfigSnapshot() {
-    setConfigSnapshot({
-      ...fiscalConfig,
-      cfops: [...fiscalConfig.cfops],
-      csts: [...fiscalConfig.csts],
-      ncms: [...fiscalConfig.ncms],
-      categories: [...fiscalConfig.categories],
-      costCenters: [...fiscalConfig.costCenters],
-      linkedTypes: [...fiscalConfig.linkedTypes],
-      units: [...(fiscalConfig.units || unitOptions)],
-    });
+    setConfigSnapshot(fiscalConfigSnapshot());
   }
 
   function saveFiscalSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
 
-    const listName = String(form.get("listName") || "") as keyof Pick<
-      FiscalConfig,
-      "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units"
-    >;
-    const itemValue = String(form.get("itemValue") || "").trim();
+    const listName = selectedConfigList;
+    const itemValue = configItemValue.trim();
+    if (!itemValue) return;
 
     if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
-    if (listName && itemValue && !fiscalConfig[listName].includes(itemValue)) {
+    if (editingConfigItem) {
+      if (!window.confirm("Tem certeza que deseja salvar esta alteração?")) return;
+      fiscalConfig[editingConfigItem.listName] = fiscalConfig[editingConfigItem.listName].map((item) =>
+        item === editingConfigItem.itemValue ? itemValue : item,
+      );
+    } else if (!fiscalConfig[listName].includes(itemValue)) {
       fiscalConfig[listName].push(itemValue);
     }
 
+    saveFiscalConfig();
     refreshConfigSnapshot();
-    event.currentTarget.reset();
+    setConfigItemValue("");
+    setEditingConfigItem(null);
   }
 
-  function editConfigItem(
-    listName: keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">,
-    itemValue: string,
-  ) {
+  function editConfigItem(listName: FiscalConfigListName, itemValue: string) {
     if (!window.confirm("Tem certeza que deseja editar este item?")) return;
-    const nextValue = window.prompt("Informe o novo valor:", itemValue)?.trim();
-    if (!nextValue || nextValue === itemValue) return;
     if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
-    fiscalConfig[listName] = fiscalConfig[listName].map((item) => (item === itemValue ? nextValue : item));
-    refreshConfigSnapshot();
+    setSelectedConfigList(listName);
+    setConfigItemValue(itemValue);
+    setEditingConfigItem({ listName, itemValue });
+    setShowEditor(true);
   }
 
-  function deleteConfigItem(
-    listName: keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">,
-    itemValue: string,
-  ) {
+  function deleteConfigItem(listName: FiscalConfigListName, itemValue: string) {
     if (!window.confirm("Tem certeza que deseja excluir este item?")) return;
     if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
     fiscalConfig[listName] = fiscalConfig[listName].filter((item) => item !== itemValue);
+    saveFiscalConfig();
     refreshConfigSnapshot();
   }
 
@@ -1669,17 +1889,27 @@ function SettingsView({ syncMode }: { syncMode: string }) {
             <ShieldCheck size={20} />
             <h2>Configurações Fiscais</h2>
           </div>
-          <button className="add-card compact-card" type="button" onClick={() => setShowEditor((current) => !current)}>
-            <Plus size={20} />
-            <strong>Alterar/adicionar</strong>
-          </button>
+          {canEdit && (
+            <button className="add-card compact-card" type="button" onClick={() => setShowEditor((current) => !current)}>
+              <Plus size={20} />
+              <strong>Alterar/adicionar</strong>
+            </button>
+          )}
         </div>
         {showEditor && (
           <form className="settings-editor" onSubmit={saveFiscalSettings}>
             <div className="form-grid">
               <label className="field">
                 <span>Lista para adicionar</span>
-                <select name="listName" defaultValue="cfops">
+                <select
+                  name="listName"
+                  value={selectedConfigList}
+                  onChange={(event) => {
+                    setSelectedConfigList(event.target.value as typeof selectedConfigList);
+                    setEditingConfigItem(null);
+                    setConfigItemValue("");
+                  }}
+                >
                   <option value="cfops">CFOP</option>
                   <option value="csts">CST</option>
                   <option value="ncms">NCM</option>
@@ -1689,11 +1919,26 @@ function SettingsView({ syncMode }: { syncMode: string }) {
                   <option value="units">Unidade</option>
                 </select>
               </label>
-              <Field label="Novo item" name="itemValue" />
+              <label className="field">
+                <span>{editingConfigItem ? "Alterar item" : "Novo item"}</span>
+                <input name="itemValue" value={configItemValue} onChange={(event) => setConfigItemValue(event.target.value)} />
+              </label>
               <div className="form-actions inline">
                 <ActionButton icon={Save} type="submit">
-                  Salvar alterações
+                  {editingConfigItem ? "Salvar alteração" : "Salvar alterações"}
                 </ActionButton>
+                {editingConfigItem && (
+                  <button
+                    className="btn ghost"
+                    type="button"
+                    onClick={() => {
+                      setEditingConfigItem(null);
+                      setConfigItemValue("");
+                    }}
+                  >
+                    Cancelar
+                  </button>
+                )}
               </div>
             </div>
           </form>
@@ -1707,16 +1952,20 @@ function SettingsView({ syncMode }: { syncMode: string }) {
             ["costCenters", configSnapshot.costCenters],
             ["linkedTypes", configSnapshot.linkedTypes],
             ["units", configSnapshot.units || unitOptions],
-          ] as Array<[keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">, string[]]>).flatMap(([listName, list]) =>
+          ] as Array<[FiscalConfigListName, string[]]>).flatMap(([listName, list]) =>
             list.map((item, index) => (
               <span className="tag-item" key={`${listName}-${item}-${index}`}>
                 {item}
-                <button className="edit-tag" type="button" title="Editar item" onClick={() => editConfigItem(listName, item)}>
-                  <Pencil size={12} />
-                </button>
-                <button type="button" title="Excluir item" onClick={() => deleteConfigItem(listName, item)}>
-                  <X size={13} />
-                </button>
+                {canEdit && (
+                  <>
+                    <button className="edit-tag" type="button" title="Editar item" onClick={() => editConfigItem(listName, item)}>
+                      <Pencil size={12} />
+                    </button>
+                    <button type="button" title="Excluir item" onClick={() => deleteConfigItem(listName, item)}>
+                      <X size={13} />
+                    </button>
+                  </>
+                )}
               </span>
             )),
           )}
@@ -1729,7 +1978,7 @@ function SettingsView({ syncMode }: { syncMode: string }) {
             <article key={role}>
               <Users size={18} />
               <strong>{role}</strong>
-              <span>Criar, editar, consultar, exportar e acompanhar conforme perfil.</span>
+              <span>{role === "Consulta" ? "Consultar." : "Criar, editar, consultar, exportar e acompanhar conforme perfil."}</span>
             </article>
           ))}
         </div>
@@ -1749,11 +1998,11 @@ function SettingsView({ syncMode }: { syncMode: string }) {
   );
 }
 
-function BackupView({ invoices, operations, resetDemo }: { invoices: Invoice[]; operations: LinkedOperation[]; resetDemo: () => void }) {
+function BackupView({ invoices, operations, resetDemo, canEdit }: { invoices: Invoice[]; operations: LinkedOperation[]; resetDemo: () => void; canEdit: boolean }) {
   return (
     <section className="panel">
       <h2>Backup</h2>
-      <p className="muted">Exporte uma copia dos dados ou restaure a base demonstrativa.</p>
+      <p className="muted">Exporte uma cópia dos dados ou restaure a base demonstrativa.</p>
       <div className="backup-actions">
         <ActionButton icon={Download} onClick={() => exportRows(invoices as unknown as Record<string, unknown>[], "backup-notas")}>
           Backup notas
@@ -1761,9 +2010,15 @@ function BackupView({ invoices, operations, resetDemo }: { invoices: Invoice[]; 
         <ActionButton icon={Download} onClick={() => exportRows(operations as unknown as Record<string, unknown>[], "backup-operacoes")}>
           Backup operações
         </ActionButton>
-        <ActionButton icon={RefreshCw} variant="ghost" onClick={resetDemo}>
-          Restaurar demonstracao
-        </ActionButton>
+        {canEdit && (
+          <ActionButton
+            icon={RefreshCw}
+            variant="ghost"
+            onClick={() => window.confirm("Tem certeza que deseja restaurar a base demonstrativa?") && resetDemo()}
+          >
+            Restaurar demonstração
+          </ActionButton>
+        )}
       </div>
     </section>
   );
@@ -1771,6 +2026,7 @@ function BackupView({ invoices, operations, resetDemo }: { invoices: Invoice[]; 
 
 export default function App() {
   const [logged, setLogged] = useState(false);
+  const [role, setRole] = useState<UserRole | null>(null);
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [registryParties, setRegistryParties] = useState<Party[]>(() => readLocal(PARTIES_KEY, parties));
@@ -1778,6 +2034,7 @@ export default function App() {
   const store = useFiscalStore();
 
   const title = useMemo(() => views.find((item) => item.id === view)?.label || "Dashboard", [view]);
+  const canEdit = role !== "Consulta";
   const updateRegistryParties = (value: Party[] | ((current: Party[]) => Party[])) => {
     setRegistryParties((current) => {
       const next = typeof value === "function" ? value(current) : value;
@@ -1795,7 +2052,10 @@ export default function App() {
   };
 
   if (!logged) {
-    return <Login onLogin={() => setLogged(true)} />;
+    return <Login onLogin={(nextRole) => {
+      setRole(nextRole);
+      setLogged(true);
+    }} />;
   }
 
   return (
@@ -1809,7 +2069,9 @@ export default function App() {
           </div>
         </div>
         <nav>
-          {views.map(({ id, label, icon: Icon }) => (
+          {views
+            .filter(({ id }) => canEdit || (id !== "new-issued" && id !== "new-received"))
+            .map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               className={view === id ? "active" : ""}
@@ -1823,7 +2085,11 @@ export default function App() {
               {label}
             </button>
           ))}
-          <button onClick={() => setLogged(false)}>
+          <button onClick={() => {
+            setLogged(false);
+            setRole(null);
+            setView("dashboard");
+          }}>
             <LogOut size={18} />
             Sair
           </button>
@@ -1855,6 +2121,7 @@ export default function App() {
               onPaid={store.markInvoicePaid}
               onDelete={store.deleteInvoice}
               onOpen={openInvoiceForm}
+              canEdit={canEdit}
             />
           )}
           {view === "received" && (
@@ -1865,14 +2132,17 @@ export default function App() {
               onPaid={store.markInvoicePaid}
               onDelete={store.deleteInvoice}
               onOpen={openInvoiceForm}
+              canEdit={canEdit}
             />
           )}
-          {view === "new-issued" && (
+          {view === "new-issued" && (canEdit || editingInvoice) && (
             <InvoiceForm
               type="issued"
               invoices={store.invoices}
+              operations={store.linkedOperations}
               parties={registryParties}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
+              canEdit={canEdit}
               onSave={store.saveInvoice}
               onDelete={store.deleteInvoice}
               onOperation={store.saveLinkedOperation}
@@ -1882,12 +2152,14 @@ export default function App() {
               }}
             />
           )}
-          {view === "new-received" && (
+          {view === "new-received" && (canEdit || editingInvoice) && (
             <InvoiceForm
               type="received"
               invoices={store.invoices}
+              operations={store.linkedOperations}
               parties={registryParties}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
+              canEdit={canEdit}
               onSave={store.saveInvoice}
               onDelete={store.deleteInvoice}
               onOperation={store.saveLinkedOperation}
@@ -1897,13 +2169,13 @@ export default function App() {
               }}
             />
           )}
-          {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} />}
+          {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}
-          {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} />}
-          {view === "settings" && <SettingsView syncMode={store.syncMode} />}
-          {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} resetDemo={store.resetDemo} />}
+          {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} />}
+          {view === "settings" && <SettingsView syncMode={store.syncMode} canEdit={canEdit} />}
+          {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} resetDemo={store.resetDemo} canEdit={canEdit} />}
         </div>
       </main>
     </div>

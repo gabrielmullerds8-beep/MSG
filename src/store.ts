@@ -307,10 +307,11 @@ export function useFiscalStore() {
   const totals = useMemo(() => {
     const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
     const received = invoices.filter((invoice) => invoice.invoiceType === "received");
+    const taxableIssued = issued.filter((invoice) => invoice.mainCfop === "5101");
     const taxableReceived = received.filter(isTaxableReceivedInvoice);
     const sum = (items: Invoice[], field: keyof Invoice) =>
       items.reduce((total, item) => total + Number(item[field] || 0), 0);
-    const cfemDue = issued.reduce((total, invoice) => {
+    const cfemDue = taxableIssued.reduce((total, invoice) => {
       const base =
         invoice.totalInvoice -
         invoice.icmsValue -
@@ -322,15 +323,15 @@ export function useFiscalStore() {
     return {
       issued,
       received,
-      revenue: sum(issued, "totalInvoice"),
+      revenue: sum(taxableIssued, "totalInvoice"),
       purchases: sum(taxableReceived, "totalInvoice"),
       issuedCount: issued.length,
       receivedCount: received.length,
-      icmsDebit: sum(issued, "icmsValue"),
+      icmsDebit: sum(taxableIssued, "icmsValue"),
       icmsCredit: sum(taxableReceived, "icmsCreditValue"),
-      pisDebit: sum(issued, "pisValue"),
+      pisDebit: sum(taxableIssued, "pisValue"),
       pisCredit: sum(taxableReceived, "pisCreditValue"),
-      cofinsDebit: sum(issued, "cofinsValue"),
+      cofinsDebit: sum(taxableIssued, "cofinsValue"),
       cofinsCredit: sum(taxableReceived, "cofinsCreditValue"),
       cfemDue,
       canceled: invoices.filter((invoice) => invoice.status === "Cancelada").length,
