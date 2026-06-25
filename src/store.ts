@@ -1,24 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { seedInvoices, seedLinkedOperations } from "./data";
-import { isSupabaseConfigured, supabase } from "./supabase";
+import { supabase } from "./supabase";
 import { Invoice, InvoiceItem, LinkedOperation } from "./types";
-
-const INVOICES_KEY = "msg-fiscal-invoices";
-const OPS_KEY = "msg-fiscal-linked-operations";
 
 const isTaxableReceivedInvoice = (invoice: Invoice) => {
   if (invoice.invoiceType !== "received") return false;
   if (invoice.hasLinkedOperation) return invoice.mainCfop === "5119";
   return invoice.mainCfop !== "5923";
-};
-
-const readLocal = <T,>(key: string, fallback: T): T => {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
 };
 
 const invoiceToRow = (invoice: Invoice) => ({
@@ -192,23 +179,11 @@ const rowToOperation = (row: Record<string, any>): LinkedOperation => ({
 });
 
 export function useFiscalStore() {
-  const [invoices, setInvoices] = useState<Invoice[]>(() =>
-    readLocal(INVOICES_KEY, seedInvoices),
-  );
-  const [linkedOperations, setLinkedOperations] = useState<LinkedOperation[]>(() =>
-    readLocal(OPS_KEY, seedLinkedOperations),
-  );
-  const [syncMode, setSyncMode] = useState<"local" | "supabase">(
-    isSupabaseConfigured ? "supabase" : "local",
-  );
-
-  useEffect(() => {
-    localStorage.setItem(INVOICES_KEY, JSON.stringify(invoices));
-  }, [invoices]);
-
-  useEffect(() => {
-    localStorage.setItem(OPS_KEY, JSON.stringify(linkedOperations));
-  }, [linkedOperations]);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [linkedOperations, setLinkedOperations] = useState<LinkedOperation[]>([]);
+  const [syncMode, setSyncMode] = useState<"offline" | "supabase">("offline");
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<string | null>(null);
 
   useEffect(() => {
     if (!supabase) return;
@@ -216,6 +191,19 @@ export function useFiscalStore() {
     let mounted = true;
 
     const loadRemote = async () => {
+      setSyncing(true);
+      const { data: sessionData } = await supabase.auth.getSession();
+
+      if (!sessionData.session) {
+        if (mounted) {
+          setInvoices([]);
+          setLinkedOperations([]);
+          setSyncMode("offline");
+          setSyncing(false);
+        }
+        return;
+      }
+
       const [invoiceResult, operationResult] = await Promise.all([
         supabase.from("invoices").select("*").order("issue_date", { ascending: false }),
         supabase.from("linked_operations").select("*").order("operation_date", { ascending: false }),
@@ -223,16 +211,40 @@ export function useFiscalStore() {
 
       if (!mounted) return;
 
-      if (!invoiceResult.error && invoiceResult.data?.length) {
+      if (invoiceResult.error || operationResult.error) {
+        setSyncMode("offline");
+        setSyncing(false);
+        return;
+      }
+
+      if (invoiceResult.data) {
         setInvoices(invoiceResult.data.map(rowToInvoice));
       }
 
-      if (!operationResult.error && operationResult.data?.length) {
+      if (operationResult.data) {
         setLinkedOperations(operationResult.data.map(rowToOperation));
       }
+
+      setSyncMode("supabase");
+      setLastSync(new Date().toISOString());
+      setSyncing(false);
     };
 
-    loadRemote();
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) loadRemote();
+      else setSyncMode("offline");
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_IN" && session) loadRemote();
+      if (event === "SIGNED_OUT") {
+        setInvoices([]);
+        setLinkedOperations([]);
+        setSyncMode("offline");
+      }
+    });
 
     const channel = supabase
       .channel("msg-fiscal-realtime")
@@ -242,50 +254,107 @@ export function useFiscalStore() {
 
     return () => {
       mounted = false;
+      subscription.unsubscribe();
       supabase.removeChannel(channel);
     };
   }, []);
 
   const saveInvoice = useCallback(async (invoice: Invoice) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. O lançamento não foi salvo.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("invoices").upsert(invoiceToRow(invoice));
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível salvar no Supabase. Verifique a conexão e tente novamente.");
+      return;
+    }
+
     setInvoices((current) => {
       const exists = current.some((item) => item.id === invoice.id);
       return exists
         ? current.map((item) => (item.id === invoice.id ? invoice : item))
         : [invoice, ...current];
     });
-
-    if (supabase) {
-      const { error } = await supabase.from("invoices").upsert(invoiceToRow(invoice));
-      if (!error) setSyncMode("supabase");
-    }
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
   }, []);
 
   const deleteInvoice = useCallback(async (id: string) => {
-    setInvoices((current) => current.filter((item) => item.id !== id));
-    if (supabase) {
-      await supabase.from("invoices").delete().eq("id", id);
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. O lançamento não foi excluído.");
+      return;
     }
+
+    setSyncing(true);
+    const { error } = await supabase.from("invoices").delete().eq("id", id);
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível excluir no Supabase. Verifique a conexão e tente novamente.");
+      return;
+    }
+
+    setInvoices((current) => current.filter((item) => item.id !== id));
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
   }, []);
 
   const saveLinkedOperation = useCallback(async (operation: LinkedOperation) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. A operação não foi salva.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("linked_operations").upsert(operationToRow(operation));
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível salvar no Supabase. Verifique a conexão e tente novamente.");
+      return;
+    }
+
     setLinkedOperations((current) => {
       const exists = current.some((item) => item.id === operation.id);
       return exists
         ? current.map((item) => (item.id === operation.id ? operation : item))
         : [operation, ...current];
     });
-
-    if (supabase) {
-      const { error } = await supabase.from("linked_operations").upsert(operationToRow(operation));
-      if (!error) setSyncMode("supabase");
-    }
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
   }, []);
 
   const deleteLinkedOperation = useCallback(async (id: string) => {
-    setLinkedOperations((current) => current.filter((item) => item.id !== id));
-    if (supabase) {
-      await supabase.from("linked_operations").delete().eq("id", id);
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. A operação não foi excluída.");
+      return;
     }
+
+    setSyncing(true);
+    const { error } = await supabase.from("linked_operations").delete().eq("id", id);
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível excluir no Supabase. Verifique a conexão e tente novamente.");
+      return;
+    }
+
+    setLinkedOperations((current) => current.filter((item) => item.id !== id));
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
   }, []);
 
   const markInvoicePaid = useCallback(
@@ -298,11 +367,6 @@ export function useFiscalStore() {
       }),
     [saveInvoice],
   );
-
-  const resetDemo = useCallback(() => {
-    setInvoices(seedInvoices);
-    setLinkedOperations(seedLinkedOperations);
-  }, []);
 
   const totals = useMemo(() => {
     const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
@@ -350,11 +414,12 @@ export function useFiscalStore() {
     linkedOperations,
     totals,
     syncMode,
+    syncing,
+    lastSync,
     saveInvoice,
     deleteInvoice,
     saveLinkedOperation,
     deleteLinkedOperation,
     markInvoicePaid,
-    resetDemo,
   };
 }

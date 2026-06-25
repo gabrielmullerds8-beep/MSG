@@ -1,4 +1,4 @@
-﻿import { FormEvent, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -26,7 +26,6 @@ import {
   Settings,
   ShieldCheck,
   Upload,
-  Users,
   X,
 } from "lucide-react";
 import {
@@ -42,8 +41,9 @@ import {
   YAxis,
 } from "recharts";
 import * as XLSX from "xlsx";
-import { fiscalConfig, formatCurrency, newId, parties, todayIso } from "./data";
+import { fiscalConfig, formatCurrency, newId, todayIso } from "./data";
 import { useFiscalStore } from "./store";
+import { isSupabaseConfigured, supabase } from "./supabase";
 import { FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party } from "./types";
 
 type View =
@@ -55,6 +55,9 @@ type View =
   | "linked"
   | "search"
   | "tax"
+  | "financial"
+  | "assets"
+  | "dre"
   | "reports"
   | "registrations"
   | "settings"
@@ -69,6 +72,9 @@ const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "linked", label: "Operações Vinculadas", icon: Link2 },
   { id: "search", label: "Consulta Fiscal", icon: FileSearch },
   { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
+  { id: "financial", label: "Financeira", icon: Database },
+  { id: "assets", label: "Patrimonial", icon: Building2 },
+  { id: "dre", label: "DRE", icon: BarChart3 },
   { id: "reports", label: "Relatórios", icon: BarChart3 },
   { id: "registrations", label: "Cadastros", icon: Building2 },
   { id: "settings", label: "Configurações", icon: Settings },
@@ -76,27 +82,9 @@ const views: Array<{ id: View; label: string; icon: any }> = [
 ];
 
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
-const PARTIES_KEY = "msg-fiscal-parties";
-const FISCAL_CONFIG_KEY = "msg-fiscal-config";
 const unitOptions = ["UN", "KG", "TN", "MT", "PC"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
-type UserRole = "Administrador" | "Consulta" | "Diretoria";
 type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">;
-
-const users: Record<UserRole, string> = {
-  Administrador: "AdministradorMSG2026",
-  Consulta: "ConsultaMSG",
-  Diretoria: "DiretoriaMSG2026",
-};
-
-const readLocal = <T,>(key: string, fallback: T): T => {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
-  } catch {
-    return fallback;
-  }
-};
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
@@ -123,11 +111,56 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.units = [...(nextConfig.units || fiscalConfig.units || unitOptions)];
 };
 
-const saveFiscalConfig = () => {
-  localStorage.setItem(FISCAL_CONFIG_KEY, JSON.stringify(fiscalConfigSnapshot()));
+const saveFiscalConfig = async () => {
+  if (!supabase) {
+    window.alert("Supabase não configurado. As configurações não foram salvas.");
+    return false;
+  }
+
+  const { error } = await supabase
+    .from("fiscal_settings")
+    .upsert({ id: "default", config: fiscalConfigSnapshot(), updated_at: new Date().toISOString() });
+
+  if (error) {
+    window.alert("Não foi possível salvar as configurações no Supabase.");
+    return false;
+  }
+
+  return true;
 };
 
-applyFiscalConfig(readLocal<Partial<FiscalConfig>>(FISCAL_CONFIG_KEY, {}));
+const partyToRow = (party: Party) => ({
+  id: party.id,
+  kind: party.kind,
+  name: party.name,
+  cnpj: party.cnpj,
+  ie: party.ie,
+  city: party.city,
+  state: party.state,
+  address: party.address,
+  phone: party.phone,
+  email: party.email,
+  category: party.category || null,
+  plate: party.plate || null,
+  active: party.active,
+  updated_at: new Date().toISOString(),
+});
+
+const rowToParty = (row: Record<string, any>): Party => ({
+  id: row.id,
+  kind: row.kind,
+  name: row.name,
+  cnpj: row.cnpj || "",
+  ie: row.ie || "",
+  city: row.city || "",
+  state: row.state || "",
+  address: row.address || "",
+  phone: row.phone || "",
+  email: row.email || "",
+  category: row.category || undefined,
+  plate: row.plate || undefined,
+  active: Boolean(row.active),
+});
 
 const onlyDigits = (value?: string | number) => String(value ?? "").replace(/\D/g, "");
 
@@ -143,6 +176,38 @@ const cleanNumber = (value: FormDataEntryValue | null) => {
   }
 
   return Number(normalized) || 0;
+};
+
+const digitsOnly = (value: string) => value.replace(/\D/g, "");
+
+const formatMoneyInput = (value: string) => {
+  const amount = cleanNumber(value);
+  return formatCurrency(amount);
+};
+
+const formatPercentInput = (value: string) => {
+  const amount = cleanNumber(value);
+  return `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)} %`;
+};
+
+const formatKgInput = (value: string) => {
+  const amount = cleanNumber(value);
+  return new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+};
+
+const formatCpfCnpj = (value: string) => {
+  const digits = digitsOnly(value).slice(0, 14);
+  if (digits.length <= 11) {
+    return digits
+      .replace(/^(\d{3})(\d)/, "$1.$2")
+      .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
+      .replace(/^(\d{3})\.(\d{3})\.(\d{3})(\d)/, "$1.$2.$3-$4");
+  }
+  return digits
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})(\d)/, "$1.$2.$3/$4")
+    .replace(/^(\d{2})\.(\d{3})\.(\d{3})\/(\d{4})(\d)/, "$1.$2.$3/$4-$5");
 };
 
 const exportRows = (rows: Record<string, unknown>[], filename: string) => {
@@ -168,6 +233,14 @@ const formatDate = (value?: string) => {
   if (!value) return "";
   const [year, month, day] = value.slice(0, 10).split("-");
   return year && month && day ? `${day}/${month}/${year}` : value;
+};
+
+const formatDateTime = (value?: string | null) => {
+  if (!value) return "Sem sincronização nesta sessão";
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "medium",
+  }).format(new Date(value));
 };
 
 const productLabel = (item: InvoiceItem) => {
@@ -361,7 +434,7 @@ function StatCard({
 }: {
   title: string;
   value: string;
-  tone?: "default" | "good" | "warn" | "danger";
+  tone?: "default" | "good" | "warn" | "danger" | "info";
 }) {
   return (
     <article className={`stat ${tone}`}>
@@ -394,12 +467,13 @@ function Field({
   inputMode?: "text" | "decimal" | "numeric";
   pattern?: string;
   maxLength?: number;
-  sanitize?: "letters" | "digits" | "kg";
+  sanitize?: "letters" | "digits" | "kg" | "cpfCnpj";
 }) {
   const sanitizeValue = (value: string) => {
     if (sanitize === "letters") return value.replace(/[^A-Za-zÀ-ÿ\s]/g, "");
     if (sanitize === "digits") return value.replace(/\D/g, "");
     if (sanitize === "kg") return value.replace(/[^\d.,]/g, "");
+    if (sanitize === "cpfCnpj") return formatCpfCnpj(value);
     return value;
   };
 
@@ -441,13 +515,86 @@ function MoneyField({
   name,
   defaultValue = "R$ 0,00",
   required,
+  autoCalc,
 }: {
   label: string;
   name: string;
   defaultValue?: string | number;
   required?: boolean;
+  autoCalc?: boolean;
 }) {
-  return <Field label={label} name={name} defaultValue={defaultValue} required={required} placeholder="R$ 0,00" inputMode="decimal" />;
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={name}
+        defaultValue={defaultValue}
+        required={required}
+        placeholder="R$ 0,00"
+        inputMode="decimal"
+        data-money={autoCalc ? "true" : undefined}
+        onBlur={(event) => {
+          event.currentTarget.value = formatMoneyInput(event.currentTarget.value);
+          if (autoCalc) event.currentTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        }}
+      />
+    </label>
+  );
+}
+
+function PercentField({ label, name, defaultValue = "0,00 %" }: { label: string; name: string; defaultValue?: string | number }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={name}
+        defaultValue={typeof defaultValue === "number" ? `${defaultValue.toFixed(2).replace(".", ",")} %` : defaultValue}
+        inputMode="decimal"
+        data-percent="true"
+        onBlur={(event) => {
+          event.currentTarget.value = formatPercentInput(event.currentTarget.value);
+          event.currentTarget.dispatchEvent(new Event("input", { bubbles: true }));
+        }}
+      />
+    </label>
+  );
+}
+
+function KgField({ label, name, defaultValue = "0,00" }: { label: string; name: string; defaultValue?: string | number }) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        name={name}
+        defaultValue={
+          typeof defaultValue === "number"
+            ? new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(defaultValue)
+            : defaultValue
+        }
+        inputMode="decimal"
+        onInput={(event) => {
+          event.currentTarget.value = event.currentTarget.value.replace(/[^\d.,]/g, "");
+        }}
+        onBlur={(event) => {
+          event.currentTarget.value = formatKgInput(event.currentTarget.value);
+        }}
+      />
+    </label>
+  );
+}
+
+function CpfCnpjField({ label, name, defaultValue = "" }: { label: string; name: string; defaultValue?: string }) {
+  return (
+    <Field
+      label={label}
+      name={name}
+      defaultValue={defaultValue}
+      placeholder="00.000.000/0000-00"
+      inputMode="numeric"
+      maxLength={18}
+      sanitize="cpfCnpj"
+    />
+  );
 }
 
 function PartySelect({
@@ -457,6 +604,7 @@ function PartySelect({
   parties,
   value,
   onChange,
+  onAdd,
 }: {
   label: string;
   name: string;
@@ -464,26 +612,47 @@ function PartySelect({
   parties: Party[];
   value: string;
   onChange: (party: Party | undefined) => void;
+  onAdd?: (kind: Party["kind"]) => void;
 }) {
+  const [query, setQuery] = useState("");
   const filtered = parties.filter((party) => party.kind === kind && party.active);
+  const suggestions = filtered.filter((party) => normalizeSearch(party.name).includes(normalizeSearch(query))).slice(0, 8);
+  const selected = filtered.find((party) => party.id === value);
 
   return (
-    <label className="field">
+    <div className="field party-search">
       <span>{label}</span>
-      <select
-        name={name}
-        value={value}
-        required
-        onChange={(event) => onChange(filtered.find((party) => party.id === event.target.value))}
-      >
-        <option value="">Selecione um cadastro</option>
-        {filtered.map((party) => (
-          <option key={party.id} value={party.id}>
-            {party.name}
-          </option>
-        ))}
-      </select>
-    </label>
+      <input
+        value={query || selected?.name || ""}
+        placeholder={`Buscar ${label.toLowerCase()}`}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          if (!event.target.value) onChange(undefined);
+        }}
+      />
+      <input name={name} type="hidden" value={value} readOnly />
+      {query && !selected && (
+        <div className="suggestion-list">
+          {suggestions.map((party) => (
+            <button
+              key={party.id}
+              type="button"
+              onClick={() => {
+                onChange(party);
+                setQuery(party.name);
+              }}
+            >
+              {party.name}
+            </button>
+          ))}
+          {!suggestions.length && onAdd && (
+            <button type="button" onClick={() => onAdd(kind)}>
+              Cadastrar novo
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -517,8 +686,9 @@ function ActionButton({
   );
 }
 
-function Login({ onLogin }: { onLogin: (role: UserRole) => void }) {
+function Login({ onLogin }: { onLogin: (email?: string) => void }) {
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
   return (
     <main className="login-page">
@@ -527,34 +697,37 @@ function Login({ onLogin }: { onLogin: (role: UserRole) => void }) {
         <h1>MSG Mineração - Sistema Fiscal</h1>
         <p>Controle interno de notas, triangulações, apuração e relatórios fiscais.</p>
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
+            setLoading(true);
             const form = new FormData(event.currentTarget);
-            const role = String(form.get("role") || "") as UserRole;
+            const email = String(form.get("email") || "").trim().toLowerCase();
             const password = String(form.get("password") || "");
 
-            if (users[role] !== password) {
-              setError("Usuário ou senha inválidos.");
+            if (isSupabaseConfigured && supabase) {
+              const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+              if (signInError) {
+                setError("E-mail ou senha inválidos.");
+                setLoading(false);
+                return;
+              }
+
+              const signedEmail = data.user?.email || email;
+              setError("");
+              setLoading(false);
+              onLogin(signedEmail);
               return;
             }
 
-            setError("");
-            onLogin(role);
+            setError("Configure o Supabase para entrar com e-mail e senha cadastrados.");
+            setLoading(false);
           }}
         >
-          <label className="field">
-            <span>Usuário</span>
-            <select name="role" defaultValue="" required>
-              <option value="">Selecione</option>
-              <option value="Administrador">Administrador</option>
-              <option value="Consulta">Consulta</option>
-              <option value="Diretoria">Diretoria</option>
-            </select>
-          </label>
+          <Field label="E-mail" name="email" type="email" required />
           <Field label="Senha" name="password" type="password" required />
           {error && <p className="form-error">{error}</p>}
           <ActionButton icon={Lock} type="submit">
-            Entrar no sistema
+            {loading ? "Entrando..." : "Entrar no sistema"}
           </ActionButton>
         </form>
       </section>
@@ -624,11 +797,11 @@ function Dashboard({
 
       <section className="stats-grid">
         <StatCard title="Faturamento bruto" value={formatCurrency(totals.revenue)} tone="good" />
-        <StatCard title="Compras brutas" value={formatCurrency(totals.purchases)} />
-        <StatCard title="Notas emitidas" value={String(totals.issuedCount)} />
-        <StatCard title="Notas recebidas" value={String(totals.receivedCount)} />
+        <StatCard title="Compras brutas" value={formatCurrency(totals.purchases)} tone="danger" />
+        <StatCard title="Notas emitidas" value={String(totals.issuedCount)} tone="info" />
+        <StatCard title="Notas recebidas" value={String(totals.receivedCount)} tone="good" />
         <StatCard title="CFEM a recolher" value={formatCurrency(totals.cfemDue)} tone="warn" />
-        <StatCard title="Operações Vinculadas" value={String(totals.linkedCount)} />
+        <StatCard title="Operações Vinculadas" value={String(totals.linkedCount)} tone="warn" />
       </section>
 
       <section className="chart-grid">
@@ -1030,6 +1203,7 @@ function InvoiceForm({
   onSave,
   onDelete,
   onOperation,
+  onAddParty,
   onDone,
 }: {
   type: InvoiceType;
@@ -1041,6 +1215,7 @@ function InvoiceForm({
   onSave: (invoice: Invoice) => void;
   onDelete?: (id: string) => void;
   onOperation: (operation: LinkedOperation) => void;
+  onAddParty: (kind: Party["kind"]) => void;
   onDone: () => void;
 }) {
   const isReceived = type === "received";
@@ -1055,6 +1230,39 @@ function InvoiceForm({
   const [selectedCarrier, setSelectedCarrier] = useState<Party | undefined>(() =>
     parties.find((party) => party.kind === "carrier" && party.name === editingInvoice?.carrierName),
   );
+  const [thirdPartyFreight, setThirdPartyFreight] = useState(false);
+
+  const recalcItemValues = (event: FormEvent<HTMLFormElement>) => {
+    const form = event.currentTarget;
+    itemIndexes.forEach((itemIndex) => {
+      const suffix = `_${itemIndex}`;
+      const quantity = cleanNumber(new FormData(form).get(`quantity${suffix}`));
+      const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
+      const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
+      const icmsBaseField = form.elements.namedItem(`icmsBase${suffix}`) as HTMLInputElement | null;
+      const icmsRateField = form.elements.namedItem(`icmsRate${suffix}`) as HTMLInputElement | null;
+      const icmsValueField = form.elements.namedItem(`icmsValue${suffix}`) as HTMLInputElement | null;
+      const pisBaseField = form.elements.namedItem(`pisCofinsBase${suffix}`) as HTMLInputElement | null;
+      const pisRateField = form.elements.namedItem(`pisRate${suffix}`) as HTMLInputElement | null;
+      const pisValueField = form.elements.namedItem(`pisValue${suffix}`) as HTMLInputElement | null;
+      const cofinsRateField = form.elements.namedItem(`cofinsRate${suffix}`) as HTMLInputElement | null;
+      const cofinsValueField = form.elements.namedItem(`cofinsValue${suffix}`) as HTMLInputElement | null;
+
+      const unitValue = cleanNumber(unitValueField?.value || null);
+      if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
+
+      const totalValue = cleanNumber(totalValueField?.value || null);
+      const icmsBase = cleanNumber(icmsBaseField?.value || null) || totalValue;
+      const icmsRate = cleanNumber(icmsRateField?.value || null);
+      if (icmsBase && icmsRate && icmsValueField) icmsValueField.value = formatCurrency((icmsBase * icmsRate) / 100);
+
+      const pisBase = cleanNumber(pisBaseField?.value || null) || totalValue;
+      const pisRate = cleanNumber(pisRateField?.value || null);
+      const cofinsRate = cleanNumber(cofinsRateField?.value || null);
+      if (pisBase && pisRate && pisValueField) pisValueField.value = formatCurrency((pisBase * pisRate) / 100);
+      if (pisBase && cofinsRate && cofinsValueField) cofinsValueField.value = formatCurrency((pisBase * cofinsRate) / 100);
+    });
+  };
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1064,7 +1272,7 @@ function InvoiceForm({
     const mainCfop = String(form.get("mainCfop") || "");
     const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
-    const freightValue = cleanNumber(form.get("freightValue"));
+    const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const totalInvoice = totalProducts + freightValue;
     const icmsBase = items.reduce((total, item) => total + item.icmsBase, 0);
     const icmsValue = items.reduce((total, item) => total + item.icmsValue, 0);
@@ -1181,7 +1389,7 @@ function InvoiceForm({
   }
 
   return (
-    <form className="view-stack" onSubmit={submit}>
+    <form className="view-stack" onSubmit={submit} onInput={recalcItemValues}>
       <fieldset disabled={!canEdit} className="form-fieldset">
       <section className="panel">
         <div className="panel-title between">
@@ -1214,6 +1422,7 @@ function InvoiceForm({
             parties={parties}
             value={selectedParty?.id || ""}
             onChange={setSelectedParty}
+            onAdd={onAddParty}
           />
           <ReadOnlyField label="CNPJ/CPF" name="partyCnpj" value={selectedParty?.cnpj || editingInvoice?.partyCnpj} />
           <ReadOnlyField label="Inscrição Estadual" name="partyIe" value={selectedParty?.ie || editingInvoice?.partyIe} />
@@ -1270,22 +1479,22 @@ function InvoiceForm({
                 <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={editingInvoice?.items[position]?.cstIcms || ""} />
                 <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={editingInvoice?.items[position]?.unit || "UN"} />
                 <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
-                <MoneyField label="Valor unitario" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.unitValue || 0)} />
-                <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.totalValue || 0)} />
-                <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsBase || 0)} />
-                <Field label="Alíquota ICMS %" name={`icmsRate_${itemIndex}`} type="number" defaultValue={editingInvoice?.items[position]?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)} />
-                <MoneyField label="Valor ICMS" name={`icmsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsValue || 0)} />
-                <MoneyField label="Base PIS/COFINS" name={`pisCofinsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisBase || 0)} />
-                <Field label="Alíquota PIS %" name={`pisRate_${itemIndex}`} type="number" defaultValue={editingInvoice?.items[position]?.pisRate || fiscalConfig.pisRate} />
-                <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisValue || 0)} />
-                <Field label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} type="number" defaultValue={editingInvoice?.items[position]?.cofinsRate || fiscalConfig.cofinsRate} />
-                <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.cofinsValue || 0)} />
+                <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.unitValue || 0)} autoCalc />
+                <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.totalValue || 0)} autoCalc />
+                <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsBase || 0)} autoCalc />
+                <PercentField label="Alíquota ICMS %" name={`icmsRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)} />
+                <MoneyField label="Valor ICMS" name={`icmsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsValue || 0)} autoCalc />
+                <MoneyField label="Base PIS/COFINS" name={`pisCofinsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisBase || 0)} autoCalc />
+                <PercentField label="Alíquota PIS %" name={`pisRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.pisRate || fiscalConfig.pisRate} />
+                <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisValue || 0)} autoCalc />
+                <PercentField label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.cofinsRate || fiscalConfig.cofinsRate} />
+                <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.cofinsValue || 0)} autoCalc />
                 {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.materialType || ""} sanitize="letters" />}
                 {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.blockNumber)} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
                 {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockColor || ""} sanitize="letters" />}
                 {!isReceived && <Field label="Qualidade do bloco" name={`blockQuality_${itemIndex}`} options={blockQualityOptions} defaultValue={editingInvoice?.items[position]?.blockQuality || ""} />}
                 {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockMeasures || ""} />}
-                {!isReceived && <Field label="KG" name={`kilograms_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.kilograms || "0"} inputMode="decimal" sanitize="kg" placeholder="17.310,50" />}
+                {!isReceived && <KgField label="KG" name={`kilograms_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.kilograms || "0"} />}
               </div>
               {isReceived && (
                 <div className="check-row">
@@ -1313,6 +1522,10 @@ function InvoiceForm({
           <h2>Transporte</h2>
           <div className="form-grid compact">
             <MoneyField label="Valor frete" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
+            <label className="check">
+              <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
+              Frete por conta de terceiros
+            </label>
             <PartySelect
               label="Transportadora"
               name="carrierId"
@@ -1320,9 +1533,10 @@ function InvoiceForm({
               parties={parties}
               value={selectedCarrier?.id || ""}
               onChange={setSelectedCarrier}
+              onAdd={onAddParty}
             />
             <input name="carrierName" type="hidden" value={selectedCarrier?.name || editingInvoice?.carrierName || ""} readOnly />
-            <Field label="Vencimento" name="freightDueDate" type="date" />
+            {!thirdPartyFreight && <Field label="Vencimento" name="freightDueDate" type="date" />}
           </div>
         </section>
 
@@ -1636,6 +1850,139 @@ function TaxDetailCard({
   );
 }
 
+function FinancialView({ invoices }: { invoices: Invoice[] }) {
+  const today = todayIso();
+  const addDays = (days: number) => {
+    const date = new Date(`${today}T00:00:00`);
+    date.setDate(date.getDate() + days);
+    return date.toISOString().slice(0, 10);
+  };
+  const payables = invoices.filter((invoice) => invoice.invoiceType === "received" && !invoice.paid);
+  const receivables = invoices.filter((invoice) => invoice.invoiceType === "issued" && !invoice.paid);
+  const inRange = (invoice: Invoice, days: number) => {
+    const dueDate = invoice.dueDate || invoice.issueDate;
+    return dueDate >= today && dueDate <= addDays(days);
+  };
+  const sumTotal = (items: Invoice[]) => items.reduce((total, invoice) => total + invoice.totalInvoice, 0);
+  const flow30 = sumTotal(receivables.filter((invoice) => inRange(invoice, 30))) - sumTotal(payables.filter((invoice) => inRange(invoice, 30)));
+  const flow60 = sumTotal(receivables.filter((invoice) => inRange(invoice, 60))) - sumTotal(payables.filter((invoice) => inRange(invoice, 60)));
+  const flow90 = sumTotal(receivables.filter((invoice) => inRange(invoice, 90))) - sumTotal(payables.filter((invoice) => inRange(invoice, 90)));
+
+  return (
+    <div className="view-stack">
+      <section className="stats-grid">
+        <StatCard title="Contas a receber" value={formatCurrency(sumTotal(receivables))} tone="good" />
+        <StatCard title="Contas a pagar" value={formatCurrency(sumTotal(payables))} tone="danger" />
+        <StatCard title="Fluxo 30 dias" value={formatCurrency(flow30)} tone={flow30 >= 0 ? "good" : "danger"} />
+        <StatCard title="Fluxo 90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
+      </section>
+      <section className="split-grid">
+        <section className="panel">
+          <h2>Contas a pagar</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fornecedor</th>
+                  <th>Vencimento</th>
+                  <th>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payables.map((invoice) => (
+                  <tr key={invoice.id}>
+                    <td>{invoice.partyName}</td>
+                    <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
+                    <td>{formatCurrency(invoice.totalInvoice)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="panel">
+          <h2>Contas a receber</h2>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cliente</th>
+                  <th>Vencimento</th>
+                  <th>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {receivables.map((invoice) => (
+                  <tr key={invoice.id}>
+                    <td>{invoice.partyName}</td>
+                    <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
+                    <td>{formatCurrency(invoice.totalInvoice)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+      <section className="panel">
+        <h2>Fluxo de caixa</h2>
+        <section className="stats-grid">
+          <StatCard title="30 dias" value={formatCurrency(flow30)} tone={flow30 >= 0 ? "good" : "danger"} />
+          <StatCard title="60 dias" value={formatCurrency(flow60)} tone={flow60 >= 0 ? "good" : "danger"} />
+          <StatCard title="90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function AssetsView() {
+  const assets = ["Máquinas", "Caminhões", "Escavadeiras", "Britadores", "Terrenos"];
+
+  return (
+    <div className="view-stack">
+      <section className="panel">
+        <h2>Módulo patrimonial</h2>
+        <div className="report-grid">
+          {assets.map((asset) => (
+            <article className="report-card" key={asset}>
+              <Building2 size={21} />
+              <h3>{asset}</h3>
+              <p className="muted">Cadastro e acompanhamento patrimonial.</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DreView({ invoices }: { invoices: Invoice[] }) {
+  const issued = invoices.filter((invoice) => invoice.invoiceType === "issued" && invoice.mainCfop === "5101");
+  const received = invoices.filter(isTaxableReceivedInvoice);
+  const sum = (items: Invoice[], selector: (invoice: Invoice) => number) => items.reduce((total, invoice) => total + selector(invoice), 0);
+  const grossRevenue = sum(issued, (invoice) => invoice.totalInvoice);
+  const taxes = sum(issued, (invoice) => invoice.icmsValue + invoice.pisValue + invoice.cofinsValue + invoice.cfemValue);
+  const costs = sum(received, (invoice) => invoice.totalInvoice);
+  const expenses = sum(received.filter((invoice) => invoice.mainCfop !== "5119"), (invoice) => invoice.totalInvoice);
+  const profit = grossRevenue - taxes - costs - expenses;
+
+  return (
+    <div className="view-stack">
+      <section className="panel">
+        <h2>DRE automática</h2>
+        <div className="dre-lines">
+          <div><span>Receita Bruta</span><strong>{formatCurrency(grossRevenue)}</strong></div>
+          <div><span>(-) Impostos</span><strong>{formatCurrency(taxes)}</strong></div>
+          <div><span>(-) Custos</span><strong>{formatCurrency(costs)}</strong></div>
+          <div><span>(-) Despesas</span><strong>{formatCurrency(expenses)}</strong></div>
+          <div className="dre-total"><span>= Lucro</span><strong>{formatCurrency(profit)}</strong></div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
   const reports = [
     "Faturamento por cliente",
@@ -1679,13 +2026,15 @@ function RegistrationsView({
   registryParties,
   setRegistryParties,
   canEdit,
+  initialKind = "customer",
 }: {
   registryParties: Party[];
   setRegistryParties: (value: Party[] | ((current: Party[]) => Party[])) => void;
   canEdit: boolean;
+  initialKind?: Party["kind"];
 }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [addKind, setAddKind] = useState<Party["kind"]>("customer");
+  const [showAdd, setShowAdd] = useState(Boolean(initialKind));
+  const [addKind, setAddKind] = useState<Party["kind"]>(initialKind || "customer");
 
   function addParty(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1739,7 +2088,7 @@ function RegistrationsView({
               </select>
             </label>
             <Field label="Nome/Razão social" name="name" required />
-            <Field label="CNPJ/CPF" name="cnpj" />
+            <CpfCnpjField label="CNPJ/CPF" name="cnpj" />
             <Field label="Inscrição Estadual" name="ie" />
             <Field label="Município" name="city" />
             <Field label="UF" name="state" defaultValue="RS" />
@@ -1841,7 +2190,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
     setConfigSnapshot(fiscalConfigSnapshot());
   }
 
-  function saveFiscalSettings(event: FormEvent<HTMLFormElement>) {
+  async function saveFiscalSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     const listName = selectedConfigList;
@@ -1858,7 +2207,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
       fiscalConfig[listName].push(itemValue);
     }
 
-    saveFiscalConfig();
+    await saveFiscalConfig();
     refreshConfigSnapshot();
     setConfigItemValue("");
     setEditingConfigItem(null);
@@ -1972,18 +2321,6 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
         </div>
       </section>
       <section className="panel">
-        <h2>Usuários e Permissões</h2>
-        <div className="role-grid">
-          {["Administrador", "Consulta", "Diretoria"].map((role) => (
-            <article key={role}>
-              <Users size={18} />
-              <strong>{role}</strong>
-              <span>{role === "Consulta" ? "Consultar." : "Criar, editar, consultar, exportar e acompanhar conforme perfil."}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-      <section className="panel">
         <h2>Importar XML e Logs</h2>
         <div className="placeholder-row">
           <Upload size={20} />
@@ -1991,18 +2328,18 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
         </div>
         <div className="placeholder-row">
           <Database size={20} />
-          Modo atual de dados: {syncMode === "supabase" ? "Supabase Realtime" : "local demonstrativo"}.
+          Modo atual de dados: {syncMode === "supabase" ? "Supabase Realtime" : "sem conexão com Supabase"}.
         </div>
       </section>
     </div>
   );
 }
 
-function BackupView({ invoices, operations, resetDemo, canEdit }: { invoices: Invoice[]; operations: LinkedOperation[]; resetDemo: () => void; canEdit: boolean }) {
+function BackupView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
   return (
     <section className="panel">
       <h2>Backup</h2>
-      <p className="muted">Exporte uma cópia dos dados ou restaure a base demonstrativa.</p>
+      <p className="muted">Exporte uma cópia dos dados online cadastrados no Supabase.</p>
       <div className="backup-actions">
         <ActionButton icon={Download} onClick={() => exportRows(invoices as unknown as Record<string, unknown>[], "backup-notas")}>
           Backup notas
@@ -2010,15 +2347,6 @@ function BackupView({ invoices, operations, resetDemo, canEdit }: { invoices: In
         <ActionButton icon={Download} onClick={() => exportRows(operations as unknown as Record<string, unknown>[], "backup-operacoes")}>
           Backup operações
         </ActionButton>
-        {canEdit && (
-          <ActionButton
-            icon={RefreshCw}
-            variant="ghost"
-            onClick={() => window.confirm("Tem certeza que deseja restaurar a base demonstrativa?") && resetDemo()}
-          >
-            Restaurar demonstração
-          </ActionButton>
-        )}
       </div>
     </section>
   );
@@ -2026,19 +2354,77 @@ function BackupView({ invoices, operations, resetDemo, canEdit }: { invoices: In
 
 export default function App() {
   const [logged, setLogged] = useState(false);
-  const [role, setRole] = useState<UserRole | null>(null);
+  const [userEmail, setUserEmail] = useState("");
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [registryParties, setRegistryParties] = useState<Party[]>(() => readLocal(PARTIES_KEY, parties));
+  const [registryParties, setRegistryParties] = useState<Party[]>([]);
+  const [, setConfigVersion] = useState(0);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
+  const [registrationKind, setRegistrationKind] = useState<Party["kind"] | undefined>();
   const store = useFiscalStore();
 
   const title = useMemo(() => views.find((item) => item.id === view)?.label || "Dashboard", [view]);
-  const canEdit = role !== "Consulta";
+  const canEdit = true;
+  useEffect(() => {
+    if (!logged || !supabase) return;
+
+    let mounted = true;
+
+    const loadOnlineRegistries = async () => {
+      const [partyResult, configResult] = await Promise.all([
+        supabase.from("parties").select("*").order("name", { ascending: true }),
+        supabase.from("fiscal_settings").select("config").eq("id", "default").maybeSingle(),
+      ]);
+
+      if (!mounted) return;
+
+      if (!partyResult.error && partyResult.data) {
+        setRegistryParties(partyResult.data.map(rowToParty));
+      }
+
+      if (!configResult.error && configResult.data?.config) {
+        applyFiscalConfig(configResult.data.config as Partial<FiscalConfig>);
+        setConfigVersion((current) => current + 1);
+      }
+    };
+
+    loadOnlineRegistries();
+
+    const channel = supabase
+      .channel("msg-fiscal-registries")
+      .on("postgres_changes", { event: "*", schema: "public", table: "parties" }, loadOnlineRegistries)
+      .on("postgres_changes", { event: "*", schema: "public", table: "fiscal_settings" }, loadOnlineRegistries)
+      .subscribe();
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(channel);
+    };
+  }, [logged]);
+
   const updateRegistryParties = (value: Party[] | ((current: Party[]) => Party[])) => {
     setRegistryParties((current) => {
       const next = typeof value === "function" ? value(current) : value;
-      localStorage.setItem(PARTIES_KEY, JSON.stringify(next));
+      if (!supabase) {
+        window.alert("Supabase não configurado. O cadastro não foi salvo.");
+        return current;
+      }
+
+      const removed = current.filter((party) => !next.some((item) => item.id === party.id));
+      const changed = next.filter((party) => {
+        const previous = current.find((item) => item.id === party.id);
+        return !previous || JSON.stringify(previous) !== JSON.stringify(party);
+      });
+
+      Promise.all([
+        ...removed.map((party) => supabase.from("parties").delete().eq("id", party.id)),
+        ...(changed.length ? [supabase.from("parties").upsert(changed.map(partyToRow), { onConflict: "id" })] : []),
+      ]).then((results) => {
+        if (results.some((result) => result.error)) {
+          window.alert("Não foi possível salvar o cadastro no Supabase.");
+        }
+      });
+
       return next;
     });
   };
@@ -2050,10 +2436,15 @@ export default function App() {
     setEditingInvoice(null);
     setView(nextView);
   };
+  const openRegistration = (kind: Party["kind"]) => {
+    setRegistrationKind(kind);
+    setEditingInvoice(null);
+    setView("registrations");
+  };
 
   if (!logged) {
-    return <Login onLogin={(nextRole) => {
-      setRole(nextRole);
+    return <Login onLogin={(email) => {
+      setUserEmail(email || "");
       setLogged(true);
     }} />;
   }
@@ -2077,6 +2468,7 @@ export default function App() {
               className={view === id ? "active" : ""}
               onClick={() => {
                 if (id === "new-issued" || id === "new-received") setEditingInvoice(null);
+                if (id === "registrations") setRegistrationKind(undefined);
                 setView(id);
                 setSidebarOpen(false);
               }}
@@ -2085,9 +2477,10 @@ export default function App() {
               {label}
             </button>
           ))}
-          <button onClick={() => {
+          <button onClick={async () => {
+            if (supabase) await supabase.auth.signOut();
             setLogged(false);
-            setRole(null);
+            setUserEmail("");
             setView("dashboard");
           }}>
             <LogOut size={18} />
@@ -2104,10 +2497,15 @@ export default function App() {
           <div>
             <span className="eyebrow">MSG Mineração Serra Geral Ltda</span>
             <h1>{title}</h1>
+            {userEmail && <span className="muted">Usuário: {userEmail}</span>}
           </div>
-          <div className="sync-pill">
-            <span className={store.syncMode === "supabase" ? "dot online" : "dot"} />
-            {store.syncMode === "supabase" ? "Online sincronizado" : "Demo local"}
+          <div
+            className="sync-pill"
+            title={`Última sincronização: ${formatDateTime(store.lastSync)}`}
+            onClick={() => window.alert(`Última sincronização:\n${formatDateTime(store.lastSync)}`)}
+          >
+            <span className={store.syncing ? "dot syncing" : store.syncMode === "supabase" ? "dot online" : "dot offline"} />
+            {store.syncing ? "Sincronizando" : store.syncMode === "supabase" ? "Sincronizado com Supabase" : "Sem conexão com Supabase"}
           </div>
         </header>
 
@@ -2146,6 +2544,7 @@ export default function App() {
               onSave={store.saveInvoice}
               onDelete={store.deleteInvoice}
               onOperation={store.saveLinkedOperation}
+              onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
                 setView("issued");
@@ -2163,6 +2562,7 @@ export default function App() {
               onSave={store.saveInvoice}
               onDelete={store.deleteInvoice}
               onOperation={store.saveLinkedOperation}
+              onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
                 setView("received");
@@ -2172,13 +2572,18 @@ export default function App() {
           {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
+          {view === "financial" && <FinancialView invoices={store.invoices} />}
+          {view === "assets" && <AssetsView />}
+          {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}
-          {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} />}
+          {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} initialKind={registrationKind} />}
           {view === "settings" && <SettingsView syncMode={store.syncMode} canEdit={canEdit} />}
-          {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} resetDemo={store.resetDemo} canEdit={canEdit} />}
+          {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} />}
         </div>
       </main>
     </div>
   );
 }
+
+
 

@@ -383,6 +383,14 @@ button {
   background: var(--green);
 }
 
+.dot.syncing {
+  background: var(--orange);
+}
+
+.dot.offline {
+  background: var(--red);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -424,8 +432,61 @@ button {
   border-left: 4px solid var(--red);
 }
 
+.stat.info {
+  border-left: 4px solid var(--blue);
+}
+
 .stat-spacer {
   min-height: 92px;
+}
+
+.party-search {
+  position: relative;
+}
+
+.suggestion-list {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 6px;
+  box-shadow: var(--shadow);
+  z-index: 5;
+}
+
+.suggestion-list button {
+  border: 0;
+  background: #f8fafc;
+  border-radius: 6px;
+  padding: 8px 10px;
+  text-align: left;
+  font-weight: 700;
+  color: #334155;
+}
+
+.suggestion-list button:hover {
+  background: #eef4ff;
+  color: var(--blue);
+}
+
+.dre-lines {
+  display: grid;
+  gap: 10px;
+}
+
+.dre-lines div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+.dre-total {
+  color: var(--green);
+  font-size: 18px;
+  border-bottom: 0 !important;
 }
 
 .chart-grid {
