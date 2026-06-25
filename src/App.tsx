@@ -162,6 +162,45 @@ const rowToParty = (row: Record<string, any>): Party => ({
   active: Boolean(row.active),
 });
 
+function OnlineVersionGuard() {
+  useEffect(() => {
+    let active = true;
+    let currentVersion = "";
+
+    const checkVersion = async () => {
+      try {
+        const response = await fetch(`/version.json?ts=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+        const data = (await response.json()) as { version?: string };
+
+        if (!active || !data.version) return;
+        if (!currentVersion) {
+          currentVersion = data.version;
+          return;
+        }
+
+        if (data.version !== currentVersion) {
+          window.location.reload();
+        }
+      } catch {
+        // A falha de versão não bloqueia o uso; a sincronização com Supabase continua controlando os dados.
+      }
+    };
+
+    checkVersion();
+    const interval = window.setInterval(checkVersion, 60_000);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  return null;
+}
+
 const onlyDigits = (value?: string | number) => String(value ?? "").replace(/\D/g, "");
 
 const cleanNumber = (value: FormDataEntryValue | null) => {
@@ -707,7 +746,10 @@ function Login({ onLogin }: { onLogin: (email?: string) => void }) {
             if (isSupabaseConfigured && supabase) {
               const { data, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
               if (signInError) {
-                setError("E-mail ou senha inválidos.");
+                const message = signInError.message.toLowerCase().includes("invalid login credentials")
+                  ? "Login recusado pelo Supabase: e-mail ou senha não conferem, ou o usuário ainda não foi confirmado no Supabase."
+                  : `Login recusado pelo Supabase: ${signInError.message}`;
+                setError(message);
                 setLoading(false);
                 return;
               }
@@ -2443,14 +2485,20 @@ export default function App() {
   };
 
   if (!logged) {
-    return <Login onLogin={(email) => {
-      setUserEmail(email || "");
-      setLogged(true);
-    }} />;
+    return (
+      <>
+        <OnlineVersionGuard />
+        <Login onLogin={(email) => {
+          setUserEmail(email || "");
+          setLogged(true);
+        }} />
+      </>
+    );
   }
 
   return (
     <div className="app-shell">
+      <OnlineVersionGuard />
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
           <div className="brand-mark small">MSG</div>
