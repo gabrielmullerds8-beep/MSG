@@ -2091,10 +2091,24 @@ function FinancePie({ title, data }: { title: string; data: Array<{ name: string
   );
 }
 
-function AssetsView({ assets, onSave }: { assets: AssetItem[]; onSave: (asset: AssetItem) => void }) {
+const assetTypeOptions = ["Máquinas", "Caminhões", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
+
+function AssetsView({
+  assets,
+  onSave,
+  onDelete,
+}: {
+  assets: AssetItem[];
+  onSave: (asset: AssetItem) => void;
+  onDelete: (id: string) => void;
+}) {
   const [showForm, setShowForm] = useState(false);
   const [editingAsset, setEditingAsset] = useState<AssetItem | null>(null);
   const visibleAssets = assets.filter((asset) => !asset.archived);
+  const groupedAssets = assetTypeOptions.map((type) => ({
+    type,
+    items: visibleAssets.filter((asset) => asset.itemType === type),
+  }));
 
   function openEdit(asset: AssetItem) {
     if (!window.confirm("Tem certeza que deseja alterar este patrimônio?")) return;
@@ -2133,6 +2147,14 @@ function AssetsView({ assets, onSave }: { assets: AssetItem[]; onSave: (asset: A
     setShowForm(false);
   }
 
+  function deleteAsset() {
+    if (!editingAsset) return;
+    if (!window.confirm("Tem certeza que deseja excluir definitivamente este patrimônio?")) return;
+    onDelete(editingAsset.id);
+    setEditingAsset(null);
+    setShowForm(false);
+  }
+
   return (
     <div className="view-stack">
       <section className="panel">
@@ -2155,10 +2177,10 @@ function AssetsView({ assets, onSave }: { assets: AssetItem[]; onSave: (asset: A
         </div>
         {showForm && (
           <form className="form-grid" onSubmit={saveAsset}>
-            <Field label="Tipo do item" name="itemType" defaultValue={editingAsset?.itemType || ""} required />
+            <Field label="Tipo do item" name="itemType" options={assetTypeOptions} defaultValue={editingAsset?.itemType || ""} required />
             <Field label="Nome do item" name="itemName" defaultValue={editingAsset?.itemName || ""} required />
             <Field label="Data de aquisição" name="acquisitionDate" type="date" defaultValue={editingAsset?.acquisitionDate || todayIso()} required />
-            <MoneyField label="Valor de aquisição" name="acquisitionValue" defaultValue={editingAsset?.acquisitionValue || 0} />
+            <MoneyField label="Valor de aquisição" name="acquisitionValue" defaultValue={formatCurrency(editingAsset?.acquisitionValue || 0)} />
             <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />
             <Field label="Número de matrícula" name="registrationNumber" defaultValue={editingAsset?.registrationNumber || ""} />
             <div className="form-actions inline">
@@ -2166,52 +2188,46 @@ function AssetsView({ assets, onSave }: { assets: AssetItem[]; onSave: (asset: A
                 {editingAsset ? "Salvar alteração" : "Salvar patrimônio"}
               </ActionButton>
               {editingAsset && (
-                <ActionButton icon={Archive} variant="danger" onClick={archiveAsset}>
-                  Arquivar item
-                </ActionButton>
+                <>
+                  <ActionButton icon={Archive} variant="ghost" onClick={archiveAsset}>
+                    Arquivar item
+                  </ActionButton>
+                  <ActionButton icon={X} variant="danger" onClick={deleteAsset}>
+                    Excluir item
+                  </ActionButton>
+                </>
               )}
             </div>
           </form>
         )}
       </section>
-      <section className="panel">
-        <h2>Patrimônios ativos</h2>
-        <table className="static-table">
-          <thead>
-            <tr>
-              <th>Tipo</th>
-              <th>Nome</th>
-              <th>Aquisição</th>
-              <th>Valor</th>
-              <th>Placa</th>
-              <th>Matrícula</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleAssets.map((asset) => (
-              <tr key={asset.id}>
-                <td>{asset.itemType}</td>
-                <td>{asset.itemName}</td>
-                <td>{formatDate(asset.acquisitionDate)}</td>
-                <td>{formatCurrency(asset.acquisitionValue)}</td>
-                <td>{asset.plate || "-"}</td>
-                <td>{asset.registrationNumber || "-"}</td>
-                <td>
+      <div className="asset-card-grid">
+        {groupedAssets.map(({ type, items }) => (
+          <section className="panel asset-group-card" key={type}>
+            <div className="panel-title between">
+              <h2>{type}</h2>
+              <span className="asset-count">{items.length}</span>
+            </div>
+            <div className="asset-list">
+              {items.map((asset) => (
+                <article className="asset-card" key={asset.id}>
+                  <div>
+                    <strong>{asset.itemName}</strong>
+                    <span>{formatDate(asset.acquisitionDate)} · {formatCurrency(asset.acquisitionValue)}</span>
+                    {(asset.plate || asset.registrationNumber) && (
+                      <small>{asset.plate ? `Placa: ${asset.plate}` : ""}{asset.plate && asset.registrationNumber ? " | " : ""}{asset.registrationNumber ? `Matrícula: ${asset.registrationNumber}` : ""}</small>
+                    )}
+                  </div>
                   <button className="icon-btn" type="button" title="Editar patrimônio" onClick={() => openEdit(asset)}>
                     <Pencil size={16} />
                   </button>
-                </td>
-              </tr>
-            ))}
-            {!visibleAssets.length && (
-              <tr>
-                <td colSpan={7}>Nenhum patrimônio ativo cadastrado.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
+                </article>
+              ))}
+              {!items.length && <p className="muted">Nenhum item ativo.</p>}
+            </div>
+          </section>
+        ))}
+      </div>
     </div>
   );
 }
@@ -2941,7 +2957,7 @@ export default function App() {
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
           {view === "financial" && <FinancialView invoices={store.invoices} onMarkPaid={store.markInvoicePaid} />}
-          {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} />}
+          {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} initialKind={registrationKind} />}

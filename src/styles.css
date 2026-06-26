@@ -58,13 +58,18 @@ button {
   min-height: min(68vh, 620px);
   display: grid;
   place-items: center;
+  padding: 28px;
+  border-radius: 12px;
+  background: radial-gradient(circle, rgba(248, 228, 122, 0.36), rgba(255, 255, 255, 0.14) 42%, rgba(18, 31, 16, 0.12) 72%);
 }
 
 .login-showcase img {
-  width: min(620px, 82%);
-  max-height: 68vh;
+  width: min(760px, 92%);
+  max-height: 74vh;
   object-fit: contain;
-  filter: drop-shadow(0 28px 54px rgba(0, 0, 0, 0.42));
+  filter:
+    drop-shadow(0 0 28px rgba(248, 228, 122, 0.5))
+    drop-shadow(0 30px 60px rgba(0, 0, 0, 0.5));
 }
 
 .login-panel {
@@ -115,18 +120,19 @@ button {
 
 .brand-logo {
   display: block;
-  width: 86px;
-  height: 64px;
+  width: 104px;
+  height: 76px;
   object-fit: cover;
   object-position: center 28%;
   border-radius: 8px;
-  border: 1px solid rgba(214, 178, 41, 0.36);
-  box-shadow: 0 10px 22px rgba(18, 31, 16, 0.18);
+  border: 1px solid rgba(214, 178, 41, 0.62);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(248, 228, 122, 0.34));
+  box-shadow: 0 12px 28px rgba(18, 31, 16, 0.28);
 }
 
 .login-logo {
-  width: 138px;
-  height: 92px;
+  width: 172px;
+  height: 112px;
 }
 
 .brand-mark.small {
@@ -137,8 +143,8 @@ button {
 }
 
 .brand-logo.small {
-  width: 48px;
-  height: 48px;
+  width: 58px;
+  height: 52px;
   flex: 0 0 auto;
   border-color: rgba(248, 228, 122, 0.4);
 }
@@ -947,6 +953,56 @@ tr:last-child td {
   padding: 6px;
 }
 
+.asset-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.asset-group-card {
+  min-height: 180px;
+}
+
+.asset-count {
+  min-width: 34px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #f7f3df;
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.asset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.asset-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfdff;
+}
+
+.asset-card strong,
+.asset-card span,
+.asset-card small {
+  display: block;
+}
+
+.asset-card span,
+.asset-card small {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
 .triple-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -971,6 +1027,7 @@ tr:last-child td {
   .stats-grid,
   .tax-summary-grid,
   .detail-grid,
+  .asset-card-grid,
   .triple-grid,
   .report-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1001,11 +1058,12 @@ tr:last-child td {
 
   .login-showcase {
     min-height: 150px;
+    padding: 16px;
   }
 
   .login-showcase img {
-    width: min(320px, 80vw);
-    max-height: 180px;
+    width: min(360px, 88vw);
+    max-height: 210px;
   }
 
   .login-panel {
@@ -1066,6 +1124,7 @@ tr:last-child td {
   .stats-grid,
   .tax-summary-grid,
   .detail-grid,
+  .asset-card-grid,
   .report-grid,
   .form-grid,
   .form-grid.compact,

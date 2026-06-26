@@ -427,6 +427,28 @@ export function useFiscalStore() {
     setSyncing(false);
   }, []);
 
+  const deleteAsset = useCallback(async (id: string) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. O patrimônio não foi excluído.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("assets").delete().eq("id", id);
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível excluir o patrimônio no Supabase.");
+      return;
+    }
+
+    setAssets((current) => current.filter((item) => item.id !== id));
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
+
   const totals = useMemo(() => {
     const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
     const received = invoices.filter((invoice) => invoice.invoiceType === "received");
@@ -482,5 +504,6 @@ export function useFiscalStore() {
     deleteLinkedOperation,
     markInvoicePaid,
     saveAsset,
+    deleteAsset,
   };
 }
