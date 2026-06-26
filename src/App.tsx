@@ -1,6 +1,7 @@
 ﻿import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  Archive,
   BarChart3,
   Bell,
   Building2,
@@ -35,6 +36,9 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
+  Cell,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -44,7 +48,7 @@ import * as XLSX from "xlsx";
 import { fiscalConfig, formatCurrency, newId, todayIso } from "./data";
 import { useFiscalStore } from "./store";
 import { isSupabaseConfigured, supabase } from "./supabase";
-import { FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party } from "./types";
+import { AssetItem, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party } from "./types";
 
 type View =
   | "dashboard"
@@ -555,12 +559,14 @@ function MoneyField({
   defaultValue = "R$ 0,00",
   required,
   autoCalc,
+  onChangeValue,
 }: {
   label: string;
   name: string;
   defaultValue?: string | number;
   required?: boolean;
   autoCalc?: boolean;
+  onChangeValue?: (value: string) => void;
 }) {
   return (
     <label className="field">
@@ -572,8 +578,10 @@ function MoneyField({
         placeholder="R$ 0,00"
         inputMode="decimal"
         data-money={autoCalc ? "true" : undefined}
+        onChange={(event) => onChangeValue?.(event.currentTarget.value)}
         onBlur={(event) => {
           event.currentTarget.value = formatMoneyInput(event.currentTarget.value);
+          onChangeValue?.(event.currentTarget.value);
           if (autoCalc) event.currentTarget.dispatchEvent(new Event("input", { bubbles: true }));
         }}
       />
@@ -725,14 +733,30 @@ function ActionButton({
   );
 }
 
-function Login({ onLogin }: { onLogin: (email?: string) => void }) {
-  const [error, setError] = useState("");
+function getAuthReturnMessage() {
+  const params = new URLSearchParams(`${window.location.search.replace(/^\?/, "")}&${window.location.hash.replace(/^#/, "")}`);
+  const errorCode = params.get("error_code");
+  const description = params.get("error_description");
+
+  if (errorCode === "otp_expired") {
+    return "O link de confirmação do e-mail expirou ou já foi usado. Gere um novo convite/recuperação no Supabase e use o link mais recente.";
+  }
+
+  if (description) return `Retorno do Supabase: ${description.replace(/\+/g, " ")}`;
+  return "";
+}
+
+function Login({ onLogin, authMessage }: { onLogin: (email?: string) => void; authMessage?: string }) {
+  const [error, setError] = useState(authMessage || "");
   const [loading, setLoading] = useState(false);
 
   return (
     <main className="login-page">
+      <div className="login-showcase">
+        <img src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
+      </div>
       <section className="login-panel">
-        <div className="brand-mark">MSG</div>
+        <img className="brand-logo login-logo" src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
         <h1>MSG Mineração - Sistema Fiscal</h1>
         <p>Controle interno de notas, triangulações, apuração e relatórios fiscais.</p>
         <form
@@ -1892,125 +1916,359 @@ function TaxDetailCard({
   );
 }
 
-function FinancialView({ invoices }: { invoices: Invoice[] }) {
+function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPaid: (invoice: Invoice, paymentDate: string) => void }) {
   const today = todayIso();
+  const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useState(today);
+  const [listType, setListType] = useState<"all" | "receivable" | "payable">("all");
+  const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const addDays = (days: number) => {
     const date = new Date(`${today}T00:00:00`);
     date.setDate(date.getDate() + days);
     return date.toISOString().slice(0, 10);
   };
-  const payables = invoices.filter((invoice) => invoice.invoiceType === "received" && !invoice.paid);
-  const receivables = invoices.filter((invoice) => invoice.invoiceType === "issued" && !invoice.paid);
+  const byPeriod = (invoice: Invoice) => {
+    const dueDate = invoice.dueDate || invoice.issueDate;
+    return (!startDate || dueDate >= startDate) && (!endDate || dueDate <= endDate);
+  };
+  const payables = invoices.filter((invoice) => invoice.invoiceType === "received" && !invoice.paid && byPeriod(invoice));
+  const receivables = invoices.filter((invoice) => invoice.invoiceType === "issued" && !invoice.paid && byPeriod(invoice));
   const inRange = (invoice: Invoice, days: number) => {
     const dueDate = invoice.dueDate || invoice.issueDate;
     return dueDate >= today && dueDate <= addDays(days);
   };
   const sumTotal = (items: Invoice[]) => items.reduce((total, invoice) => total + invoice.totalInvoice, 0);
-  const flow30 = sumTotal(receivables.filter((invoice) => inRange(invoice, 30))) - sumTotal(payables.filter((invoice) => inRange(invoice, 30)));
-  const flow60 = sumTotal(receivables.filter((invoice) => inRange(invoice, 60))) - sumTotal(payables.filter((invoice) => inRange(invoice, 60)));
-  const flow90 = sumTotal(receivables.filter((invoice) => inRange(invoice, 90))) - sumTotal(payables.filter((invoice) => inRange(invoice, 90)));
+  const flowParts = (days: number) => ({
+    receive: sumTotal(receivables.filter((invoice) => inRange(invoice, days))),
+    pay: sumTotal(payables.filter((invoice) => inRange(invoice, days))),
+  });
+  const flow30Parts = flowParts(30);
+  const flow60Parts = flowParts(60);
+  const flow90Parts = flowParts(90);
+  const flow30 = flow30Parts.receive - flow30Parts.pay;
+  const flow60 = flow60Parts.receive - flow60Parts.pay;
+  const flow90 = flow90Parts.receive - flow90Parts.pay;
+  const monthKey = (invoice: Invoice) => (invoice.dueDate || invoice.issueDate).slice(0, 7);
+  const monthlyKeys = Array.from(new Set([...payables, ...receivables].map(monthKey))).sort();
+  const flowChart = [
+    { name: "A receber", value: flow30Parts.receive, color: "#16a34a" },
+    { name: "A pagar", value: flow30Parts.pay, color: "#dc2626" },
+  ];
+  const flowChart60 = [
+    { name: "A receber", value: flow60Parts.receive, color: "#16a34a" },
+    { name: "A pagar", value: flow60Parts.pay, color: "#dc2626" },
+  ];
+  const flowChart90 = [
+    { name: "A receber", value: flow90Parts.receive, color: "#16a34a" },
+    { name: "A pagar", value: flow90Parts.pay, color: "#dc2626" },
+  ];
+  const visiblePayables = listType === "receivable" ? [] : payables;
+  const visibleReceivables = listType === "payable" ? [] : receivables;
+  const markPaid = (invoice: Invoice) => {
+    const paymentDate = paymentDates[invoice.id] || today;
+    if (window.confirm("Tem certeza que deseja marcar este lançamento como pago?")) {
+      onMarkPaid(invoice, paymentDate);
+    }
+  };
+  const renderRows = (items: Invoice[], partyLabel: string) => (
+    <table className="static-table">
+      <thead>
+        <tr>
+          <th>{partyLabel}</th>
+          <th>Vencimento</th>
+          <th>Valor</th>
+          <th>Data de pagamento</th>
+          <th>Pago</th>
+        </tr>
+      </thead>
+      <tbody>
+        {items.map((invoice) => (
+          <tr key={invoice.id}>
+            <td>{invoice.partyName}</td>
+            <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
+            <td>{formatCurrency(invoice.totalInvoice)}</td>
+            <td>
+              <input
+                className="compact-input"
+                type="date"
+                value={paymentDates[invoice.id] || today}
+                onChange={(event) => setPaymentDates((current) => ({ ...current, [invoice.id]: event.target.value }))}
+              />
+            </td>
+            <td>
+              <input type="checkbox" checked={false} onChange={() => markPaid(invoice)} />
+            </td>
+          </tr>
+        ))}
+        {!items.length && (
+          <tr>
+            <td colSpan={5}>Nenhum lançamento em aberto no período.</td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
 
   return (
     <div className="view-stack">
+      <section className="toolbar">
+        <div className="filters">
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Tipo</span>
+            <select value={listType} onChange={(event) => setListType(event.target.value as typeof listType)}>
+              <option value="all">A receber e a pagar</option>
+              <option value="receivable">A receber</option>
+              <option value="payable">A pagar</option>
+            </select>
+          </label>
+        </div>
+      </section>
       <section className="stats-grid">
-        <StatCard title="Contas a receber" value={formatCurrency(sumTotal(receivables))} tone="good" />
-        <StatCard title="Contas a pagar" value={formatCurrency(sumTotal(payables))} tone="danger" />
+        <StatCard title="Total contas a receber" value={formatCurrency(sumTotal(receivables))} tone="good" />
+        <StatCard title="Total contas a pagar" value={formatCurrency(sumTotal(payables))} tone="danger" />
         <StatCard title="Fluxo 30 dias" value={formatCurrency(flow30)} tone={flow30 >= 0 ? "good" : "danger"} />
+        <StatCard title="Fluxo 60 dias" value={formatCurrency(flow60)} tone={flow60 >= 0 ? "good" : "danger"} />
         <StatCard title="Fluxo 90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
       </section>
       <section className="split-grid">
-        <section className="panel">
+        {!!visiblePayables.length || listType !== "receivable" ? <section className="panel">
           <h2>Contas a pagar</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Fornecedor</th>
-                  <th>Vencimento</th>
-                  <th>Valor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payables.map((invoice) => (
-                  <tr key={invoice.id}>
-                    <td>{invoice.partyName}</td>
-                    <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
-                    <td>{formatCurrency(invoice.totalInvoice)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-        <section className="panel">
+          {renderRows(visiblePayables, "Fornecedor")}
+        </section> : null}
+        {!!visibleReceivables.length || listType !== "payable" ? <section className="panel">
           <h2>Contas a receber</h2>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cliente</th>
-                  <th>Vencimento</th>
-                  <th>Valor</th>
-                </tr>
-              </thead>
-              <tbody>
-                {receivables.map((invoice) => (
-                  <tr key={invoice.id}>
-                    <td>{invoice.partyName}</td>
-                    <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
-                    <td>{formatCurrency(invoice.totalInvoice)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
+          {renderRows(visibleReceivables, "Cliente")}
+        </section> : null}
       </section>
-      <section className="panel">
-        <h2>Fluxo de caixa</h2>
-        <section className="stats-grid">
-          <StatCard title="30 dias" value={formatCurrency(flow30)} tone={flow30 >= 0 ? "good" : "danger"} />
-          <StatCard title="60 dias" value={formatCurrency(flow60)} tone={flow60 >= 0 ? "good" : "danger"} />
-          <StatCard title="90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
-        </section>
+      <section className="triple-grid">
+        <FinancePie title="Fluxo 30 dias" data={flowChart} />
+        <FinancePie title="Fluxo 60 dias" data={flowChart60} />
+        <FinancePie title="Fluxo 90 dias" data={flowChart90} />
+      </section>
+      <section className="stats-grid">
+        {monthlyKeys.map((key) => {
+          const receive = sumTotal(receivables.filter((invoice) => monthKey(invoice) === key));
+          const pay = sumTotal(payables.filter((invoice) => monthKey(invoice) === key));
+          return (
+            <StatCard
+              key={key}
+              title={`Resultado ${key.slice(5, 7)}/${key.slice(0, 4)}`}
+              value={`${formatCurrency(receive)} / ${formatCurrency(pay)}`}
+              tone={receive >= pay ? "good" : "danger"}
+            />
+          );
+        })}
       </section>
     </div>
   );
 }
 
-function AssetsView() {
-  const assets = ["Máquinas", "Caminhões", "Escavadeiras", "Britadores", "Terrenos"];
+function FinancePie({ title, data }: { title: string; data: Array<{ name: string; value: number; color: string }> }) {
+  const chartData = data.some((item) => item.value > 0) ? data : [{ name: "Sem lançamentos", value: 1, color: "#94a3b8" }];
+  return (
+    <section className="panel chart-panel compact-chart">
+      <h2>{title}</h2>
+      <ResponsiveContainer width="100%" height={220}>
+        <PieChart>
+          <Pie data={chartData} dataKey="value" nameKey="name" outerRadius={72} label>
+            {chartData.map((entry) => (
+              <Cell key={entry.name} fill={entry.color} />
+            ))}
+          </Pie>
+          <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+          <Legend />
+        </PieChart>
+      </ResponsiveContainer>
+    </section>
+  );
+}
+
+function AssetsView({ assets, onSave }: { assets: AssetItem[]; onSave: (asset: AssetItem) => void }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editingAsset, setEditingAsset] = useState<AssetItem | null>(null);
+  const visibleAssets = assets.filter((asset) => !asset.archived);
+
+  function openEdit(asset: AssetItem) {
+    if (!window.confirm("Tem certeza que deseja alterar este patrimônio?")) return;
+    setEditingAsset(asset);
+    setShowForm(true);
+  }
+
+  function saveAsset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const now = new Date().toISOString();
+    const asset: AssetItem = {
+      id: editingAsset?.id || newId("asset"),
+      itemType: String(form.get("itemType") || ""),
+      itemName: String(form.get("itemName") || ""),
+      acquisitionDate: String(form.get("acquisitionDate") || todayIso()),
+      acquisitionValue: cleanNumber(form.get("acquisitionValue")),
+      plate: String(form.get("plate") || ""),
+      registrationNumber: String(form.get("registrationNumber") || ""),
+      archived: editingAsset?.archived || false,
+      createdAt: editingAsset?.createdAt || now,
+      updatedAt: now,
+    };
+
+    onSave(asset);
+    setEditingAsset(null);
+    setShowForm(false);
+    event.currentTarget.reset();
+  }
+
+  function archiveAsset() {
+    if (!editingAsset) return;
+    if (!window.confirm("Tem certeza que deseja arquivar este patrimônio vendido?")) return;
+    onSave({ ...editingAsset, archived: true, updatedAt: new Date().toISOString() });
+    setEditingAsset(null);
+    setShowForm(false);
+  }
 
   return (
     <div className="view-stack">
       <section className="panel">
-        <h2>Módulo patrimonial</h2>
-        <div className="report-grid">
-          {assets.map((asset) => (
-            <article className="report-card" key={asset}>
-              <Building2 size={21} />
-              <h3>{asset}</h3>
-              <p className="muted">Cadastro e acompanhamento patrimonial.</p>
-            </article>
-          ))}
+        <div className="panel-title between">
+          <div className="panel-title">
+            <Building2 size={20} />
+            <h2>Módulo patrimonial</h2>
+          </div>
+          <button
+            className="add-card compact-card"
+            type="button"
+            onClick={() => {
+              setEditingAsset(null);
+              setShowForm((current) => !current);
+            }}
+          >
+            <Plus size={20} />
+            <strong>Adicionar/alterar</strong>
+          </button>
         </div>
+        {showForm && (
+          <form className="form-grid" onSubmit={saveAsset}>
+            <Field label="Tipo do item" name="itemType" defaultValue={editingAsset?.itemType || ""} required />
+            <Field label="Nome do item" name="itemName" defaultValue={editingAsset?.itemName || ""} required />
+            <Field label="Data de aquisição" name="acquisitionDate" type="date" defaultValue={editingAsset?.acquisitionDate || todayIso()} required />
+            <MoneyField label="Valor de aquisição" name="acquisitionValue" defaultValue={editingAsset?.acquisitionValue || 0} />
+            <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />
+            <Field label="Número de matrícula" name="registrationNumber" defaultValue={editingAsset?.registrationNumber || ""} />
+            <div className="form-actions inline">
+              <ActionButton icon={Save} type="submit">
+                {editingAsset ? "Salvar alteração" : "Salvar patrimônio"}
+              </ActionButton>
+              {editingAsset && (
+                <ActionButton icon={Archive} variant="danger" onClick={archiveAsset}>
+                  Arquivar item
+                </ActionButton>
+              )}
+            </div>
+          </form>
+        )}
+      </section>
+      <section className="panel">
+        <h2>Patrimônios ativos</h2>
+        <table className="static-table">
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Nome</th>
+              <th>Aquisição</th>
+              <th>Valor</th>
+              <th>Placa</th>
+              <th>Matrícula</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleAssets.map((asset) => (
+              <tr key={asset.id}>
+                <td>{asset.itemType}</td>
+                <td>{asset.itemName}</td>
+                <td>{formatDate(asset.acquisitionDate)}</td>
+                <td>{formatCurrency(asset.acquisitionValue)}</td>
+                <td>{asset.plate || "-"}</td>
+                <td>{asset.registrationNumber || "-"}</td>
+                <td>
+                  <button className="icon-btn" type="button" title="Editar patrimônio" onClick={() => openEdit(asset)}>
+                    <Pencil size={16} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!visibleAssets.length && (
+              <tr>
+                <td colSpan={7}>Nenhum patrimônio ativo cadastrado.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </section>
     </div>
   );
 }
 
 function DreView({ invoices }: { invoices: Invoice[] }) {
-  const issued = invoices.filter((invoice) => invoice.invoiceType === "issued" && invoice.mainCfop === "5101");
-  const received = invoices.filter(isTaxableReceivedInvoice);
+  const [startDate, setStartDate] = useState(todayIso().slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useState(todayIso());
+  const [showAdjust, setShowAdjust] = useState(false);
+  const [simulatedCosts, setSimulatedCosts] = useState("");
+  const [simulatedExpenses, setSimulatedExpenses] = useState("");
+  const inPeriod = (invoice: Invoice) => {
+    const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
+    return (!startDate || date >= startDate) && (!endDate || date <= endDate);
+  };
+  const issued = invoices.filter((invoice) => invoice.invoiceType === "issued" && invoice.mainCfop === "5101" && inPeriod(invoice));
+  const received = invoices.filter((invoice) => isTaxableReceivedInvoice(invoice) && inPeriod(invoice));
   const sum = (items: Invoice[], selector: (invoice: Invoice) => number) => items.reduce((total, invoice) => total + selector(invoice), 0);
   const grossRevenue = sum(issued, (invoice) => invoice.totalInvoice);
   const taxes = sum(issued, (invoice) => invoice.icmsValue + invoice.pisValue + invoice.cofinsValue + invoice.cfemValue);
-  const costs = sum(received, (invoice) => invoice.totalInvoice);
-  const expenses = sum(received.filter((invoice) => invoice.mainCfop !== "5119"), (invoice) => invoice.totalInvoice);
+  const automaticCosts = sum(received, (invoice) => invoice.totalInvoice);
+  const automaticExpenses = sum(received.filter((invoice) => invoice.mainCfop !== "5119"), (invoice) => invoice.totalInvoice);
+  const costs = simulatedCosts ? cleanNumber(simulatedCosts) : automaticCosts;
+  const expenses = simulatedExpenses ? cleanNumber(simulatedExpenses) : automaticExpenses;
   const profit = grossRevenue - taxes - costs - expenses;
+  const dreChart = [
+    { name: "Impostos", value: Math.max(taxes, 0), color: "#dc2626" },
+    { name: "Custos", value: Math.max(costs, 0), color: "#f97316" },
+    { name: "Despesas", value: Math.max(expenses, 0), color: "#7c3aed" },
+    { name: "Lucro", value: Math.max(profit, 0), color: "#16a34a" },
+  ];
 
   return (
     <div className="view-stack">
+      <section className="toolbar">
+        <div className="filters">
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+        </div>
+        <ActionButton icon={Settings} variant="ghost" onClick={() => setShowAdjust((current) => !current)}>
+          Ajustar Custos e Despesas
+        </ActionButton>
+      </section>
+      {showAdjust && (
+        <section className="panel">
+          <h2>Simulação visual</h2>
+          <div className="form-grid">
+            <MoneyField label="Custos simulados" name="simulatedCosts" defaultValue={costs} onChangeValue={setSimulatedCosts} />
+            <MoneyField label="Despesas simuladas" name="simulatedExpenses" defaultValue={expenses} onChangeValue={setSimulatedExpenses} />
+          </div>
+        </section>
+      )}
       <section className="panel">
         <h2>DRE automática</h2>
         <div className="dre-lines">
@@ -2020,6 +2278,20 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
           <div><span>(-) Despesas</span><strong>{formatCurrency(expenses)}</strong></div>
           <div className="dre-total"><span>= Lucro</span><strong>{formatCurrency(profit)}</strong></div>
         </div>
+      </section>
+      <section className="panel chart-panel">
+        <h2>DRE em gráfico</h2>
+        <ResponsiveContainer width="100%" height={300}>
+          <PieChart>
+            <Pie data={dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]} dataKey="value" nameKey="name" outerRadius={105} label>
+              {(dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]).map((entry) => (
+                <Cell key={entry.name} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+            <Legend />
+          </PieChart>
+        </ResponsiveContainer>
       </section>
     </div>
   );
@@ -2397,6 +2669,7 @@ function BackupView({ invoices, operations }: { invoices: Invoice[]; operations:
 export default function App() {
   const [logged, setLogged] = useState(false);
   const [userEmail, setUserEmail] = useState("");
+  const [authMessage, setAuthMessage] = useState(() => getAuthReturnMessage());
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [registryParties, setRegistryParties] = useState<Party[]>([]);
@@ -2407,6 +2680,52 @@ export default function App() {
 
   const title = useMemo(() => views.find((item) => item.id === view)?.label || "Dashboard", [view]);
   const canEdit = true;
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    let mounted = true;
+
+    const clearAuthParams = () => {
+      if (window.location.search || window.location.hash) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      if (data.session?.user.email) {
+        setUserEmail(data.session.user.email);
+        setLogged(true);
+        setAuthMessage("");
+        clearAuthParams();
+      } else if (authMessage) {
+        clearAuthParams();
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!mounted) return;
+      if ((event === "SIGNED_IN" || event === "TOKEN_REFRESHED") && session?.user.email) {
+        setUserEmail(session.user.email);
+        setLogged(true);
+        setAuthMessage("");
+        clearAuthParams();
+      }
+      if (event === "SIGNED_OUT") {
+        setLogged(false);
+        setUserEmail("");
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [authMessage]);
+
   useEffect(() => {
     if (!logged || !supabase) return;
 
@@ -2490,8 +2809,9 @@ export default function App() {
         <OnlineVersionGuard />
         <Login onLogin={(email) => {
           setUserEmail(email || "");
+          setAuthMessage("");
           setLogged(true);
-        }} />
+        }} authMessage={authMessage} />
       </>
     );
   }
@@ -2501,7 +2821,7 @@ export default function App() {
       <OnlineVersionGuard />
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <div className="brand-mark small">MSG</div>
+          <img className="brand-logo small" src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
           <div>
             <strong>MSG Mineração</strong>
             <span>Sistema Fiscal</span>
@@ -2620,8 +2940,8 @@ export default function App() {
           {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
-          {view === "financial" && <FinancialView invoices={store.invoices} />}
-          {view === "assets" && <AssetsView />}
+          {view === "financial" && <FinancialView invoices={store.invoices} onMarkPaid={store.markInvoicePaid} />}
+          {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} initialKind={registrationKind} />}

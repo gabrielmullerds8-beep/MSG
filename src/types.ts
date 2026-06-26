@@ -169,3 +169,16 @@ export interface FiscalConfig {
   linkedTypes: string[];
   units?: string[];
 }
+
+export interface AssetItem {
+  id: string;
+  itemType: string;
+  itemName: string;
+  acquisitionDate: string;
+  acquisitionValue: number;
+  plate?: string;
+  registrationNumber?: string;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}

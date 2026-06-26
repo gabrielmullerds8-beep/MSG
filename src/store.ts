@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
-import { Invoice, InvoiceItem, LinkedOperation } from "./types";
+import { AssetItem, Invoice, InvoiceItem, LinkedOperation } from "./types";
 
 const isTaxableReceivedInvoice = (invoice: Invoice) => {
   if (invoice.invoiceType !== "received") return false;
@@ -178,9 +178,36 @@ const rowToOperation = (row: Record<string, any>): LinkedOperation => ({
   updatedAt: row.updated_at,
 });
 
+const assetToRow = (asset: AssetItem) => ({
+  id: asset.id,
+  item_type: asset.itemType,
+  item_name: asset.itemName,
+  acquisition_date: asset.acquisitionDate,
+  acquisition_value: asset.acquisitionValue,
+  plate: asset.plate || null,
+  registration_number: asset.registrationNumber || null,
+  archived: asset.archived,
+  created_at: asset.createdAt,
+  updated_at: asset.updatedAt,
+});
+
+const rowToAsset = (row: Record<string, any>): AssetItem => ({
+  id: row.id,
+  itemType: row.item_type,
+  itemName: row.item_name,
+  acquisitionDate: row.acquisition_date,
+  acquisitionValue: Number(row.acquisition_value || 0),
+  plate: row.plate || undefined,
+  registrationNumber: row.registration_number || undefined,
+  archived: Boolean(row.archived),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 export function useFiscalStore() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [linkedOperations, setLinkedOperations] = useState<LinkedOperation[]>([]);
+  const [assets, setAssets] = useState<AssetItem[]>([]);
   const [syncMode, setSyncMode] = useState<"offline" | "supabase">("offline");
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
@@ -204,9 +231,10 @@ export function useFiscalStore() {
         return;
       }
 
-      const [invoiceResult, operationResult] = await Promise.all([
+      const [invoiceResult, operationResult, assetResult] = await Promise.all([
         supabase.from("invoices").select("*").order("issue_date", { ascending: false }),
         supabase.from("linked_operations").select("*").order("operation_date", { ascending: false }),
+        supabase.from("assets").select("*").order("acquisition_date", { ascending: false }),
       ]);
 
       if (!mounted) return;
@@ -223,6 +251,10 @@ export function useFiscalStore() {
 
       if (operationResult.data) {
         setLinkedOperations(operationResult.data.map(rowToOperation));
+      }
+
+      if (!assetResult.error && assetResult.data) {
+        setAssets(assetResult.data.map(rowToAsset));
       }
 
       setSyncMode("supabase");
@@ -242,6 +274,7 @@ export function useFiscalStore() {
       if (event === "SIGNED_OUT") {
         setInvoices([]);
         setLinkedOperations([]);
+        setAssets([]);
         setSyncMode("offline");
       }
     });
@@ -250,6 +283,7 @@ export function useFiscalStore() {
       .channel("msg-fiscal-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, loadRemote)
       .on("postgres_changes", { event: "*", schema: "public", table: "linked_operations" }, loadRemote)
+      .on("postgres_changes", { event: "*", schema: "public", table: "assets" }, loadRemote)
       .subscribe();
 
     return () => {
@@ -358,15 +392,40 @@ export function useFiscalStore() {
   }, []);
 
   const markInvoicePaid = useCallback(
-    (invoice: Invoice) =>
+    (invoice: Invoice, paymentDate = new Date().toISOString().slice(0, 10)) =>
       saveInvoice({
         ...invoice,
         paid: true,
-        paymentDate: new Date().toISOString().slice(0, 10),
+        paymentDate,
         updatedAt: new Date().toISOString(),
       }),
     [saveInvoice],
   );
+
+  const saveAsset = useCallback(async (asset: AssetItem) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase não configurado. O patrimônio não foi salvo.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("assets").upsert(assetToRow(asset));
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Não foi possível salvar o patrimônio no Supabase.");
+      return;
+    }
+
+    setAssets((current) => {
+      const exists = current.some((item) => item.id === asset.id);
+      return exists ? current.map((item) => (item.id === asset.id ? asset : item)) : [asset, ...current];
+    });
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
 
   const totals = useMemo(() => {
     const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
@@ -412,6 +471,7 @@ export function useFiscalStore() {
   return {
     invoices,
     linkedOperations,
+    assets,
     totals,
     syncMode,
     syncing,
@@ -421,5 +481,6 @@ export function useFiscalStore() {
     saveLinkedOperation,
     deleteLinkedOperation,
     markInvoicePaid,
+    saveAsset,
   };
 }

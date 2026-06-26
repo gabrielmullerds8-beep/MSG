@@ -134,7 +134,20 @@ create table if not exists public.fiscal_settings (
   updated_at timestamptz not null default now()
 );
 
-drop table if exists public.allowed_users;
+create table if not exists public.assets (
+  id text primary key,
+  item_type text not null,
+  item_name text not null,
+  acquisition_date date not null,
+  acquisition_value numeric(14, 2) not null default 0,
+  plate text,
+  registration_number text,
+  archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+drop table if exists public.allowed_users cascade;
 
 
 create index if not exists invoices_type_date_idx on public.invoices(invoice_type, issue_date);
@@ -142,6 +155,7 @@ create index if not exists invoices_cfop_idx on public.invoices(main_cfop);
 create index if not exists invoices_party_idx on public.invoices(party_name);
 create index if not exists linked_operations_status_idx on public.linked_operations(status);
 create index if not exists parties_kind_name_idx on public.parties(kind, name);
+create index if not exists assets_archived_type_idx on public.assets(archived, item_type);
 
 alter table public.invoices replica identity full;
 alter table public.linked_operations replica identity full;
@@ -198,17 +212,32 @@ begin
   end if;
 end $$;
 
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'assets'
+  ) then
+    alter publication supabase_realtime add table public.assets;
+  end if;
+end $$;
+
 alter table public.invoices enable row level security;
 alter table public.linked_operations enable row level security;
 alter table public.audit_logs enable row level security;
 alter table public.attachments enable row level security;
 alter table public.parties enable row level security;
 alter table public.fiscal_settings enable row level security;
+alter table public.assets enable row level security;
 
 grant select, insert, update, delete on table public.invoices to authenticated;
 grant select, insert, update, delete on table public.linked_operations to authenticated;
 grant select, insert, update, delete on table public.parties to authenticated;
 grant select, insert, update, delete on table public.fiscal_settings to authenticated;
+grant select, insert, update, delete on table public.assets to authenticated;
 grant select on table public.audit_logs to authenticated;
 grant select on table public.attachments to authenticated;
 
@@ -260,6 +289,19 @@ create policy "Allow authenticated read fiscal settings"
 drop policy if exists "Allow authenticated write fiscal settings" on public.fiscal_settings;
 create policy "Allow authenticated write fiscal settings"
   on public.fiscal_settings for all
+  to authenticated
+  using (true)
+  with check (true);
+
+drop policy if exists "Allow authenticated read assets" on public.assets;
+create policy "Allow authenticated read assets"
+  on public.assets for select
+  to authenticated
+  using (true);
+
+drop policy if exists "Allow authenticated write assets" on public.assets;
+create policy "Allow authenticated write assets"
+  on public.assets for all
   to authenticated
   using (true)
   with check (true);
