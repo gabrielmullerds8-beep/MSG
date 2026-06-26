@@ -753,10 +753,10 @@ function Login({ onLogin, authMessage }: { onLogin: (email?: string) => void; au
   return (
     <main className="login-page">
       <div className="login-showcase">
-        <img src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
+        <img src="/brand/msg-mark.png" alt="MSG Mineração Serra Geral" />
       </div>
       <section className="login-panel">
-        <img className="brand-logo login-logo" src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
+        <img className="brand-logo login-logo" src="/brand/msg-mark.png" alt="MSG Mineração Serra Geral" />
         <h1>MSG Mineração - Sistema Fiscal</h1>
         <p>Controle interno de notas, triangulações, apuração e relatórios fiscais.</p>
         <form
@@ -2837,7 +2837,7 @@ export default function App() {
       <OnlineVersionGuard />
       <aside className={`sidebar ${sidebarOpen ? "open" : ""}`}>
         <div className="sidebar-brand">
-          <img className="brand-logo small" src="/brand/msg-logo.png" alt="MSG Mineração Serra Geral" />
+          <img className="brand-logo small" src="/brand/msg-mark.png" alt="MSG Mineração Serra Geral" />
           <div>
             <strong>MSG Mineração</strong>
             <span>Sistema Fiscal</span>
