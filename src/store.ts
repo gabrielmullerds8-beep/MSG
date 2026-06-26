@@ -1,12 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { invoiceConsidersCost, invoiceConsidersSale } from "./data";
 import { supabase } from "./supabase";
 import { AssetItem, Invoice, InvoiceItem, LinkedOperation } from "./types";
-
-const isTaxableReceivedInvoice = (invoice: Invoice) => {
-  if (invoice.invoiceType !== "received") return false;
-  if (invoice.hasLinkedOperation) return invoice.mainCfop === "5119";
-  return invoice.mainCfop !== "5923";
-};
 
 const invoiceToRow = (invoice: Invoice) => ({
   id: invoice.id,
@@ -215,16 +210,18 @@ export function useFiscalStore() {
   useEffect(() => {
     if (!supabase) return;
 
+    const client = supabase;
     let mounted = true;
 
     const loadRemote = async () => {
       setSyncing(true);
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData } = await client.auth.getSession();
 
       if (!sessionData.session) {
         if (mounted) {
           setInvoices([]);
           setLinkedOperations([]);
+          setAssets([]);
           setSyncMode("offline");
           setSyncing(false);
         }
@@ -232,14 +229,14 @@ export function useFiscalStore() {
       }
 
       const [invoiceResult, operationResult, assetResult] = await Promise.all([
-        supabase.from("invoices").select("*").order("issue_date", { ascending: false }),
-        supabase.from("linked_operations").select("*").order("operation_date", { ascending: false }),
-        supabase.from("assets").select("*").order("acquisition_date", { ascending: false }),
+        client.from("invoices").select("*").order("issue_date", { ascending: false }),
+        client.from("linked_operations").select("*").order("operation_date", { ascending: false }),
+        client.from("assets").select("*").order("acquisition_date", { ascending: false }),
       ]);
 
       if (!mounted) return;
 
-      if (invoiceResult.error || operationResult.error) {
+      if (invoiceResult.error || operationResult.error || assetResult.error) {
         setSyncMode("offline");
         setSyncing(false);
         return;
@@ -253,7 +250,7 @@ export function useFiscalStore() {
         setLinkedOperations(operationResult.data.map(rowToOperation));
       }
 
-      if (!assetResult.error && assetResult.data) {
+      if (assetResult.data) {
         setAssets(assetResult.data.map(rowToAsset));
       }
 
@@ -262,14 +259,14 @@ export function useFiscalStore() {
       setSyncing(false);
     };
 
-    supabase.auth.getSession().then(({ data }) => {
+    client.auth.getSession().then(({ data }) => {
       if (data.session) loadRemote();
       else setSyncMode("offline");
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
+    } = client.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_IN" && session) loadRemote();
       if (event === "SIGNED_OUT") {
         setInvoices([]);
@@ -279,7 +276,7 @@ export function useFiscalStore() {
       }
     });
 
-    const channel = supabase
+    const channel = client
       .channel("msg-fiscal-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, loadRemote)
       .on("postgres_changes", { event: "*", schema: "public", table: "linked_operations" }, loadRemote)
@@ -289,7 +286,7 @@ export function useFiscalStore() {
     return () => {
       mounted = false;
       subscription.unsubscribe();
-      supabase.removeChannel(channel);
+      client.removeChannel(channel);
     };
   }, []);
 
@@ -449,46 +446,40 @@ export function useFiscalStore() {
     setSyncing(false);
   }, []);
 
-  const totals = useMemo(() => {
-    const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
-    const received = invoices.filter((invoice) => invoice.invoiceType === "received");
-    const taxableIssued = issued.filter((invoice) => invoice.mainCfop === "5101");
-    const taxableReceived = received.filter(isTaxableReceivedInvoice);
-    const sum = (items: Invoice[], field: keyof Invoice) =>
-      items.reduce((total, item) => total + Number(item[field] || 0), 0);
-    const cfemDue = taxableIssued.reduce((total, invoice) => {
-      const base =
-        invoice.totalInvoice -
-        invoice.icmsValue -
-        invoice.pisValue -
-        invoice.cofinsValue;
-      return total + Math.max(base, 0) * 0.02;
-    }, 0);
+  const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
+  const received = invoices.filter((invoice) => invoice.invoiceType === "received");
+  const taxableIssued = issued.filter(invoiceConsidersSale);
+  const taxableReceived = received.filter(invoiceConsidersCost);
+  const sum = (items: Invoice[], field: keyof Invoice) =>
+    items.reduce((total, item) => total + Number(item[field] || 0), 0);
+  const cfemDue = taxableIssued.reduce((total, invoice) => {
+    const base = invoice.totalInvoice - invoice.icmsValue - invoice.pisValue - invoice.cofinsValue;
+    return total + Math.max(base, 0) * 0.02;
+  }, 0);
 
-    return {
-      issued,
-      received,
-      revenue: sum(taxableIssued, "totalInvoice"),
-      purchases: sum(taxableReceived, "totalInvoice"),
-      issuedCount: issued.length,
-      receivedCount: received.length,
-      icmsDebit: sum(taxableIssued, "icmsValue"),
-      icmsCredit: sum(taxableReceived, "icmsCreditValue"),
-      pisDebit: sum(taxableIssued, "pisValue"),
-      pisCredit: sum(taxableReceived, "pisCreditValue"),
-      cofinsDebit: sum(taxableIssued, "cofinsValue"),
-      cofinsCredit: sum(taxableReceived, "cofinsCreditValue"),
-      cfemDue,
-      canceled: invoices.filter((invoice) => invoice.status === "Cancelada").length,
-      linkedCount: linkedOperations.length,
-      soldWeight: issued.reduce(
-        (total, invoice) =>
-          total + invoice.items.reduce((sub, item) => sub + Number(item.kilograms || 0), 0),
-        0,
-      ),
-      averageTicket: issued.length ? sum(issued, "totalInvoice") / issued.length : 0,
-    };
-  }, [invoices, linkedOperations]);
+  const totals = {
+    issued,
+    received,
+    revenue: sum(taxableIssued, "totalInvoice"),
+    purchases: sum(taxableReceived, "totalInvoice"),
+    issuedCount: issued.length,
+    receivedCount: received.length,
+    icmsDebit: sum(taxableIssued, "icmsValue"),
+    icmsCredit: sum(taxableReceived, "icmsCreditValue"),
+    pisDebit: sum(taxableIssued, "pisValue"),
+    pisCredit: sum(taxableReceived, "pisCreditValue"),
+    cofinsDebit: sum(taxableIssued, "cofinsValue"),
+    cofinsCredit: sum(taxableReceived, "cofinsCreditValue"),
+    cfemDue,
+    canceled: invoices.filter((invoice) => invoice.status === "Cancelada").length,
+    linkedCount: linkedOperations.length,
+    soldWeight: taxableIssued.reduce(
+      (total, invoice) =>
+        total + invoice.items.reduce((sub, item) => sub + Number(item.kilograms || 0), 0),
+      0,
+    ),
+    averageTicket: taxableIssued.length ? sum(taxableIssued, "totalInvoice") / taxableIssued.length : 0,
+  };
 
   return {
     invoices,

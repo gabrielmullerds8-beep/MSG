@@ -159,6 +159,9 @@ create index if not exists assets_archived_type_idx on public.assets(archived, i
 
 alter table public.invoices replica identity full;
 alter table public.linked_operations replica identity full;
+alter table public.parties replica identity full;
+alter table public.fiscal_settings replica identity full;
+alter table public.assets replica identity full;
 
 do $$
 begin
@@ -232,6 +235,14 @@ alter table public.attachments enable row level security;
 alter table public.parties enable row level security;
 alter table public.fiscal_settings enable row level security;
 alter table public.assets enable row level security;
+
+revoke all on table public.invoices from anon;
+revoke all on table public.linked_operations from anon;
+revoke all on table public.parties from anon;
+revoke all on table public.fiscal_settings from anon;
+revoke all on table public.assets from anon;
+revoke all on table public.audit_logs from anon;
+revoke all on table public.attachments from anon;
 
 grant select, insert, update, delete on table public.invoices to authenticated;
 grant select, insert, update, delete on table public.linked_operations to authenticated;

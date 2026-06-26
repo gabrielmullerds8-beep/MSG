@@ -44,8 +44,16 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import * as XLSX from "xlsx";
-import { fiscalConfig, formatCurrency, newId, todayIso } from "./data";
+import {
+  fiscalConfig,
+  formatCurrency,
+  getCfopCode,
+  invoiceConsidersCost,
+  invoiceConsidersSale,
+  invoiceHasFinancialEffect,
+  newId,
+  todayIso,
+} from "./data";
 import { useFiscalStore } from "./store";
 import { isSupabaseConfigured, supabase } from "./supabase";
 import { AssetItem, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party } from "./types";
@@ -93,6 +101,7 @@ type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" |
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
   cfops: [...fiscalConfig.cfops],
+  cfopRules: { ...(fiscalConfig.cfopRules || {}) },
   csts: [...fiscalConfig.csts],
   ncms: [...fiscalConfig.ncms],
   categories: [...fiscalConfig.categories],
@@ -107,6 +116,7 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
   fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
   fiscalConfig.cfops = [...(nextConfig.cfops || fiscalConfig.cfops)];
+  fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}), ...(nextConfig.cfopRules || {}) };
   fiscalConfig.csts = [...(nextConfig.csts || fiscalConfig.csts)];
   fiscalConfig.ncms = [...(nextConfig.ncms || fiscalConfig.ncms)];
   fiscalConfig.categories = [...(nextConfig.categories || fiscalConfig.categories)];
@@ -254,15 +264,43 @@ const formatCpfCnpj = (value: string) => {
 };
 
 const exportRows = (rows: Record<string, unknown>[], filename: string) => {
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Dados");
-  XLSX.writeFile(workbook, `${filename}.xlsx`);
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+  const escapeHtml = (value: unknown) =>
+    String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  const html = `
+    <html>
+      <head><meta charset="utf-8" /></head>
+      <body>
+        <table>
+          <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+          <tbody>
+            ${rows
+              .map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(row[column])}</td>`).join("")}</tr>`)
+              .join("")}
+          </tbody>
+        </table>
+      </body>
+    </html>`;
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${filename}.xls`;
+  link.click();
+  URL.revokeObjectURL(url);
 };
 
 const exportCsv = (rows: Record<string, unknown>[], filename: string) => {
-  const worksheet = XLSX.utils.json_to_sheet(rows);
-  const csv = XLSX.utils.sheet_to_csv(worksheet);
+  const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+  const escapeCsv = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const csv = [
+    columns.map(escapeCsv).join(";"),
+    ...rows.map((row) => columns.map((column) => escapeCsv(row[column])).join(";")),
+  ].join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -399,12 +437,6 @@ const operationIdFromInvoices = (mainInvoiceNumber: string, linkedInvoiceNumber:
   const main = onlyDigits(mainInvoiceNumber).replace(/^0+/, "");
   const linked = onlyDigits(linkedInvoiceNumber).replace(/^0+/, "");
   return main && linked ? `op_${main}_${linked}` : newId("op");
-};
-
-const isTaxableReceivedInvoice = (invoice: Invoice) => {
-  if (invoice.invoiceType !== "received") return false;
-  if (invoice.hasLinkedOperation) return invoice.mainCfop === "5119";
-  return invoice.mainCfop !== "5923";
 };
 
 function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainCfop: string): InvoiceItem {
@@ -814,7 +846,7 @@ function Dashboard({
 }) {
   const byCustomer = Object.values(
     totals.issued
-      .filter((invoice) => invoice.mainCfop === "5101")
+      .filter(invoiceConsidersSale)
       .reduce<Record<string, { name: string; value: number }>>((acc, invoice) => {
         acc[invoice.partyName] ||= { name: invoice.partyName, value: 0 };
         acc[invoice.partyName].value += invoice.totalInvoice;
@@ -823,7 +855,7 @@ function Dashboard({
   );
   const byProduct = Object.values(
     totals.issued
-      .filter((invoice) => invoice.mainCfop === "5101")
+      .filter(invoiceConsidersSale)
       .flatMap(invoiceProductEntries)
       .reduce<Record<string, { name: string; value: number }>>((acc, product) => {
         const key = product.name;
@@ -834,7 +866,7 @@ function Dashboard({
   );
   const monthly = Object.values(
     totals.issued
-      .filter((invoice) => invoice.mainCfop === "5101")
+      .filter(invoiceConsidersSale)
       .reduce<Record<string, { month: string; faturamento: number }>>((acc, invoice) => {
         const key = invoice.issueDate.slice(0, 7);
         acc[key] ||= { month: `${key.slice(5, 7)}/${key.slice(0, 4)}`, faturamento: 0 };
@@ -1807,8 +1839,8 @@ function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["tota
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return date?.slice(0, 7) === period;
   });
-  const issuedTaxable = periodInvoices.filter((invoice) => invoice.invoiceType === "issued" && invoice.mainCfop === "5101");
-  const receivedTaxable = periodInvoices.filter(isTaxableReceivedInvoice);
+  const issuedTaxable = periodInvoices.filter(invoiceConsidersSale);
+  const receivedTaxable = periodInvoices.filter(invoiceConsidersCost);
   const sumInvoices = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, invoice) => total + Number(invoice[field] || 0), 0);
 
@@ -1931,8 +1963,8 @@ function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPa
     const dueDate = invoice.dueDate || invoice.issueDate;
     return (!startDate || dueDate >= startDate) && (!endDate || dueDate <= endDate);
   };
-  const payables = invoices.filter((invoice) => invoice.invoiceType === "received" && !invoice.paid && byPeriod(invoice));
-  const receivables = invoices.filter((invoice) => invoice.invoiceType === "issued" && !invoice.paid && byPeriod(invoice));
+  const payables = invoices.filter((invoice) => invoiceConsidersCost(invoice) && !invoice.paid && byPeriod(invoice));
+  const receivables = invoices.filter((invoice) => invoiceConsidersSale(invoice) && !invoice.paid && byPeriod(invoice));
   const inRange = (invoice: Invoice, days: number) => {
     const dueDate = invoice.dueDate || invoice.issueDate;
     return dueDate >= today && dueDate <= addDays(days);
@@ -2242,13 +2274,13 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return (!startDate || date >= startDate) && (!endDate || date <= endDate);
   };
-  const issued = invoices.filter((invoice) => invoice.invoiceType === "issued" && invoice.mainCfop === "5101" && inPeriod(invoice));
-  const received = invoices.filter((invoice) => isTaxableReceivedInvoice(invoice) && inPeriod(invoice));
+  const issued = invoices.filter((invoice) => invoiceConsidersSale(invoice) && inPeriod(invoice));
+  const received = invoices.filter((invoice) => invoiceConsidersCost(invoice) && inPeriod(invoice));
   const sum = (items: Invoice[], selector: (invoice: Invoice) => number) => items.reduce((total, invoice) => total + selector(invoice), 0);
   const grossRevenue = sum(issued, (invoice) => invoice.totalInvoice);
   const taxes = sum(issued, (invoice) => invoice.icmsValue + invoice.pisValue + invoice.cofinsValue + invoice.cfemValue);
   const automaticCosts = sum(received, (invoice) => invoice.totalInvoice);
-  const automaticExpenses = sum(received.filter((invoice) => invoice.mainCfop !== "5119"), (invoice) => invoice.totalInvoice);
+  const automaticExpenses = 0;
   const costs = simulatedCosts ? cleanNumber(simulatedCosts) : automaticCosts;
   const expenses = simulatedExpenses ? cleanNumber(simulatedExpenses) : automaticExpenses;
   const profit = grossRevenue - taxes - costs - expenses;
@@ -2314,6 +2346,7 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
 }
 
 function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
+  const financialInvoices = invoices.filter(invoiceHasFinancialEffect);
   const reports = [
     "Faturamento por cliente",
     "Faturamento por produto",
@@ -2341,7 +2374,7 @@ function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations
             <BarChart3 size={21} />
             <h3>{report}</h3>
             <div className="report-actions">
-              <button onClick={() => exportRows(invoices as unknown as Record<string, unknown>[], report.toLowerCase().replaceAll(" ", "-"))}>Excel</button>
+              <button onClick={() => exportRows(financialInvoices as unknown as Record<string, unknown>[], report.toLowerCase().replace(/\s+/g, "-"))}>Excel</button>
               <button onClick={() => exportCsv(operations as unknown as Record<string, unknown>[], "operacoes")}>CSV</button>
               <button onClick={() => window.print()}>PDF</button>
             </div>
@@ -2514,10 +2547,54 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
     listName: FiscalConfigListName;
     itemValue: string;
   } | null>(null);
+  const [cfopConsiderSale, setCfopConsiderSale] = useState(false);
+  const [cfopConsiderCost, setCfopConsiderCost] = useState(false);
   const [configSnapshot, setConfigSnapshot] = useState<FiscalConfig>(fiscalConfigSnapshot());
 
   function refreshConfigSnapshot() {
     setConfigSnapshot(fiscalConfigSnapshot());
+  }
+
+  function getConfigList(listName: FiscalConfigListName) {
+    if (listName === "units") {
+      if (!fiscalConfig.units) fiscalConfig.units = [...unitOptions];
+      return fiscalConfig.units;
+    }
+
+    return fiscalConfig[listName];
+  }
+
+  function setConfigList(listName: FiscalConfigListName, list: string[]) {
+    if (listName === "units") {
+      fiscalConfig.units = list;
+      return;
+    }
+
+    fiscalConfig[listName] = list;
+  }
+
+  function applyCfopRule(itemValue: string, previousValue?: string) {
+    if (selectedConfigList !== "cfops" && editingConfigItem?.listName !== "cfops") return;
+
+    const nextCode = getCfopCode(itemValue);
+    const previousCode = previousValue ? getCfopCode(previousValue) : "";
+    fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}) };
+
+    if (previousCode && previousCode !== nextCode) {
+      delete fiscalConfig.cfopRules[previousCode];
+    }
+
+    if (nextCode) {
+      fiscalConfig.cfopRules[nextCode] = {
+        considerSale: cfopConsiderSale,
+        considerCost: cfopConsiderCost,
+      };
+    }
+  }
+
+  function resetCfopRuleInputs() {
+    setCfopConsiderSale(false);
+    setCfopConsiderCost(false);
   }
 
   async function saveFiscalSettings(event: FormEvent<HTMLFormElement>) {
@@ -2527,35 +2604,45 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
     const itemValue = configItemValue.trim();
     if (!itemValue) return;
 
-    if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
     if (editingConfigItem) {
       if (!window.confirm("Tem certeza que deseja salvar esta alteração?")) return;
-      fiscalConfig[editingConfigItem.listName] = fiscalConfig[editingConfigItem.listName].map((item) =>
+      setConfigList(editingConfigItem.listName, getConfigList(editingConfigItem.listName).map((item) =>
         item === editingConfigItem.itemValue ? itemValue : item,
-      );
-    } else if (!fiscalConfig[listName].includes(itemValue)) {
-      fiscalConfig[listName].push(itemValue);
+      ));
+      applyCfopRule(itemValue, editingConfigItem.itemValue);
+    } else if (!getConfigList(listName).includes(itemValue)) {
+      setConfigList(listName, [...getConfigList(listName), itemValue]);
+      applyCfopRule(itemValue);
     }
 
     await saveFiscalConfig();
     refreshConfigSnapshot();
     setConfigItemValue("");
     setEditingConfigItem(null);
+    resetCfopRuleInputs();
   }
 
   function editConfigItem(listName: FiscalConfigListName, itemValue: string) {
     if (!window.confirm("Tem certeza que deseja editar este item?")) return;
-    if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
     setSelectedConfigList(listName);
     setConfigItemValue(itemValue);
     setEditingConfigItem({ listName, itemValue });
+    if (listName === "cfops") {
+      const rule = fiscalConfig.cfopRules?.[getCfopCode(itemValue)] || {};
+      setCfopConsiderSale(Boolean(rule.considerSale));
+      setCfopConsiderCost(Boolean(rule.considerCost));
+    } else {
+      resetCfopRuleInputs();
+    }
     setShowEditor(true);
   }
 
   function deleteConfigItem(listName: FiscalConfigListName, itemValue: string) {
     if (!window.confirm("Tem certeza que deseja excluir este item?")) return;
-    if (listName === "units" && !fiscalConfig.units) fiscalConfig.units = [...unitOptions];
-    fiscalConfig[listName] = fiscalConfig[listName].filter((item) => item !== itemValue);
+    setConfigList(listName, getConfigList(listName).filter((item) => item !== itemValue));
+    if (listName === "cfops" && fiscalConfig.cfopRules) {
+      delete fiscalConfig.cfopRules[getCfopCode(itemValue)];
+    }
     saveFiscalConfig();
     refreshConfigSnapshot();
   }
@@ -2587,6 +2674,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                     setSelectedConfigList(event.target.value as typeof selectedConfigList);
                     setEditingConfigItem(null);
                     setConfigItemValue("");
+                    resetCfopRuleInputs();
                   }}
                 >
                   <option value="cfops">CFOP</option>
@@ -2602,6 +2690,26 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                 <span>{editingConfigItem ? "Alterar item" : "Novo item"}</span>
                 <input name="itemValue" value={configItemValue} onChange={(event) => setConfigItemValue(event.target.value)} />
               </label>
+              {selectedConfigList === "cfops" && (
+                <div className="checkbox-field rule-checkboxes">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={cfopConsiderSale}
+                      onChange={(event) => setCfopConsiderSale(event.target.checked)}
+                    />
+                    Considerar venda
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={cfopConsiderCost}
+                      onChange={(event) => setCfopConsiderCost(event.target.checked)}
+                    />
+                    Considerar custo
+                  </label>
+                </div>
+              )}
               <div className="form-actions inline">
                 <ActionButton icon={Save} type="submit">
                   {editingConfigItem ? "Salvar alteração" : "Salvar alterações"}
@@ -2613,6 +2721,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                     onClick={() => {
                       setEditingConfigItem(null);
                       setConfigItemValue("");
+                      resetCfopRuleInputs();
                     }}
                   >
                     Cancelar
@@ -2635,6 +2744,16 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
             list.map((item, index) => (
               <span className="tag-item" key={`${listName}-${item}-${index}`}>
                 {item}
+                {listName === "cfops" && (
+                  <span className="cfop-rule-badges">
+                    {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale && <small className="rule-badge sale">Venda</small>}
+                    {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && <small className="rule-badge cost">Custo</small>}
+                    {!configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale &&
+                      !configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && (
+                        <small className="rule-badge neutral">Sem efeito financeiro</small>
+                      )}
+                  </span>
+                )}
                 {canEdit && (
                   <>
                     <button className="edit-tag" type="button" title="Editar item" onClick={() => editConfigItem(listName, item)}>
@@ -2745,12 +2864,13 @@ export default function App() {
   useEffect(() => {
     if (!logged || !supabase) return;
 
+    const client = supabase;
     let mounted = true;
 
     const loadOnlineRegistries = async () => {
       const [partyResult, configResult] = await Promise.all([
-        supabase.from("parties").select("*").order("name", { ascending: true }),
-        supabase.from("fiscal_settings").select("config").eq("id", "default").maybeSingle(),
+        client.from("parties").select("*").order("name", { ascending: true }),
+        client.from("fiscal_settings").select("config").eq("id", "default").maybeSingle(),
       ]);
 
       if (!mounted) return;
@@ -2767,7 +2887,7 @@ export default function App() {
 
     loadOnlineRegistries();
 
-    const channel = supabase
+    const channel = client
       .channel("msg-fiscal-registries")
       .on("postgres_changes", { event: "*", schema: "public", table: "parties" }, loadOnlineRegistries)
       .on("postgres_changes", { event: "*", schema: "public", table: "fiscal_settings" }, loadOnlineRegistries)
@@ -2775,14 +2895,15 @@ export default function App() {
 
     return () => {
       mounted = false;
-      supabase.removeChannel(channel);
+      client.removeChannel(channel);
     };
   }, [logged]);
 
   const updateRegistryParties = (value: Party[] | ((current: Party[]) => Party[])) => {
     setRegistryParties((current) => {
       const next = typeof value === "function" ? value(current) : value;
-      if (!supabase) {
+      const client = supabase;
+      if (!client) {
         window.alert("Supabase não configurado. O cadastro não foi salvo.");
         return current;
       }
@@ -2794,8 +2915,8 @@ export default function App() {
       });
 
       Promise.all([
-        ...removed.map((party) => supabase.from("parties").delete().eq("id", party.id)),
-        ...(changed.length ? [supabase.from("parties").upsert(changed.map(partyToRow), { onConflict: "id" })] : []),
+        ...removed.map((party) => client.from("parties").delete().eq("id", party.id)),
+        ...(changed.length ? [client.from("parties").upsert(changed.map(partyToRow), { onConflict: "id" })] : []),
       ]).then((results) => {
         if (results.some((result) => result.error)) {
           window.alert("Não foi possível salvar o cadastro no Supabase.");

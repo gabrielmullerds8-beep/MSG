@@ -5,7 +5,6 @@ export type InvoiceStatus =
   | "Pendente"
   | "Cancelada"
   | "Aguardando XML"
-  | "Em conferencia"
   | "Em conferência";
 
 export type LinkedStatus =
@@ -13,7 +12,6 @@ export type LinkedStatus =
   | "Finalizada"
   | "Parcialmente vinculada"
   | "Pendente de XML"
-  | "Pendente de conferencia"
   | "Pendente de conferência"
   | "Cancelada";
 
@@ -162,12 +160,18 @@ export interface FiscalConfig {
   cofinsRate: number;
   cfemRate: number;
   cfops: string[];
+  cfopRules?: Record<string, CfopRule>;
   csts: string[];
   ncms: string[];
   categories: string[];
   costCenters: string[];
   linkedTypes: string[];
   units?: string[];
+}
+
+export interface CfopRule {
+  considerSale?: boolean;
+  considerCost?: boolean;
 }
 
 export interface AssetItem {
