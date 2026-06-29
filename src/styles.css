@@ -680,6 +680,64 @@ tr:last-child td {
   font-size: 15px;
 }
 
+.item-totals-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.item-totals-grid .stat {
+  min-height: 74px;
+}
+
+.item-totals-grid .stat strong {
+  font-size: 18px;
+}
+
+.installments-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.installment-row {
+  display: grid;
+  grid-template-columns: 74px repeat(5, minmax(0, 1fr)) 36px;
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 10px;
+}
+
+.installment-row strong {
+  align-self: center;
+  color: #334155;
+  font-size: 13px;
+}
+
+.finance-pf-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.finance-pf-total span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.finance-pf-total strong {
+  color: #0f172a;
+  font-size: 18px;
+}
+
 .check-row {
   display: flex;
   flex-wrap: wrap;
@@ -706,6 +764,7 @@ tr:last-child td {
 .form-actions {
   display: flex;
   justify-content: flex-end;
+  gap: 10px;
   position: sticky;
   bottom: 0;
   background: rgba(244, 246, 248, 0.9);
@@ -959,13 +1018,14 @@ tr:last-child td {
 
 .static-table {
   width: 100%;
+  min-width: 0;
   table-layout: fixed;
   border-collapse: collapse;
 }
 
 .static-table th,
 .static-table td {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line);
   padding: 10px 8px;
   text-align: left;
   vertical-align: middle;
@@ -983,9 +1043,118 @@ tr:last-child td {
   width: 100%;
   min-width: 0;
   height: 34px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px;
+}
+
+.bank-balance-card {
+  gap: 8px;
+}
+
+.bank-balance-card input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.transport-third-party {
+  margin: -6px 0 14px;
+}
+
+.dre-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+}
+
+.pf-mini-card {
+  min-width: 170px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--blue);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 12px;
+}
+
+.pf-mini-card strong {
+  font-size: 13px;
+  color: #0f172a;
+}
+
+.pf-mini-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settings-list-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.settings-list-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+  min-width: 0;
+}
+
+.settings-list-group h3 {
+  margin: 0 0 10px;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.settings-list-group .tag-list {
+  margin-top: 0;
+}
+
+.registration-field {
+  gap: 5px;
+}
+
+.mini-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mini-check-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.mini-check-row input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--blue);
+}
+
+.chart-panel,
+.compact-chart,
+.chart-card {
+  overflow: hidden;
+}
+
+.recharts-wrapper,
+.recharts-surface {
+  max-width: 100%;
 }
 
 .asset-card-grid {
@@ -1064,7 +1233,13 @@ tr:last-child td {
   .detail-grid,
   .asset-card-grid,
   .triple-grid,
-  .report-grid {
+  .report-grid,
+  .settings-list-grid,
+  .item-totals-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .installment-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1161,11 +1336,17 @@ tr:last-child td {
   .detail-grid,
   .asset-card-grid,
   .report-grid,
+  .settings-list-grid,
+  .item-totals-grid,
   .form-grid,
   .form-grid.compact,
   .settings-grid,
   .role-grid,
   .alerts {
+    grid-template-columns: 1fr;
+  }
+
+  .installment-row {
     grid-template-columns: 1fr;
   }
 

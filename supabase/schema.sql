@@ -54,6 +54,7 @@
   final_recipient_name text,
   physical_receiver_name text,
   items jsonb not null default '[]'::jsonb,
+  financial_installments jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -63,6 +64,9 @@ alter table public.invoices
 
 alter table public.invoices
   add column if not exists carrier_name text;
+
+alter table public.invoices
+  add column if not exists financial_installments jsonb not null default '[]'::jsonb;
 
 create table if not exists public.linked_operations (
   id text primary key,
@@ -153,6 +157,7 @@ drop table if exists public.allowed_users cascade;
 create index if not exists invoices_type_date_idx on public.invoices(invoice_type, issue_date);
 create index if not exists invoices_cfop_idx on public.invoices(main_cfop);
 create index if not exists invoices_party_idx on public.invoices(party_name);
+create index if not exists attachments_invoice_id_idx on public.attachments(invoice_id);
 create index if not exists linked_operations_status_idx on public.linked_operations(status);
 create index if not exists parties_kind_name_idx on public.parties(kind, name);
 create index if not exists assets_archived_type_idx on public.assets(archived, item_type);
@@ -243,6 +248,13 @@ revoke all on table public.fiscal_settings from anon;
 revoke all on table public.assets from anon;
 revoke all on table public.audit_logs from anon;
 revoke all on table public.attachments from anon;
+revoke all on table public.invoices from authenticated;
+revoke all on table public.linked_operations from authenticated;
+revoke all on table public.parties from authenticated;
+revoke all on table public.fiscal_settings from authenticated;
+revoke all on table public.assets from authenticated;
+revoke all on table public.audit_logs from authenticated;
+revoke all on table public.attachments from authenticated;
 
 grant select, insert, update, delete on table public.invoices to authenticated;
 grant select, insert, update, delete on table public.linked_operations to authenticated;
@@ -252,79 +264,160 @@ grant select, insert, update, delete on table public.assets to authenticated;
 grant select on table public.audit_logs to authenticated;
 grant select on table public.attachments to authenticated;
 
+do $$
+begin
+  if exists (
+    select 1
+    from pg_proc
+    join pg_namespace on pg_namespace.oid = pg_proc.pronamespace
+    where pg_namespace.nspname = 'public'
+      and pg_proc.proname = 'rls_auto_enable'
+      and pg_get_function_identity_arguments(pg_proc.oid) = ''
+  ) then
+    revoke execute on function public.rls_auto_enable() from public;
+    revoke execute on function public.rls_auto_enable() from anon;
+    revoke execute on function public.rls_auto_enable() from authenticated;
+  end if;
+end $$;
+
 drop policy if exists "Allow authenticated read invoices" on public.invoices;
 create policy "Allow authenticated read invoices"
   on public.invoices for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated write invoices" on public.invoices;
-create policy "Allow authenticated write invoices"
-  on public.invoices for all
+drop policy if exists "Allow authenticated insert invoices" on public.invoices;
+create policy "Allow authenticated insert invoices"
+  on public.invoices for insert
   to authenticated
-  using (true)
-  with check (true);
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update invoices" on public.invoices;
+create policy "Allow authenticated update invoices"
+  on public.invoices for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete invoices" on public.invoices;
+create policy "Allow authenticated delete invoices"
+  on public.invoices for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read linked operations" on public.linked_operations;
 create policy "Allow authenticated read linked operations"
   on public.linked_operations for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated write linked operations" on public.linked_operations;
-create policy "Allow authenticated write linked operations"
-  on public.linked_operations for all
+drop policy if exists "Allow authenticated insert linked operations" on public.linked_operations;
+create policy "Allow authenticated insert linked operations"
+  on public.linked_operations for insert
   to authenticated
-  using (true)
-  with check (true);
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update linked operations" on public.linked_operations;
+create policy "Allow authenticated update linked operations"
+  on public.linked_operations for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete linked operations" on public.linked_operations;
+create policy "Allow authenticated delete linked operations"
+  on public.linked_operations for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read parties" on public.parties;
 create policy "Allow authenticated read parties"
   on public.parties for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated write parties" on public.parties;
-create policy "Allow authenticated write parties"
-  on public.parties for all
+drop policy if exists "Allow authenticated insert parties" on public.parties;
+create policy "Allow authenticated insert parties"
+  on public.parties for insert
   to authenticated
-  using (true)
-  with check (true);
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update parties" on public.parties;
+create policy "Allow authenticated update parties"
+  on public.parties for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete parties" on public.parties;
+create policy "Allow authenticated delete parties"
+  on public.parties for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read fiscal settings" on public.fiscal_settings;
 create policy "Allow authenticated read fiscal settings"
   on public.fiscal_settings for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated write fiscal settings" on public.fiscal_settings;
-create policy "Allow authenticated write fiscal settings"
-  on public.fiscal_settings for all
+drop policy if exists "Allow authenticated insert fiscal settings" on public.fiscal_settings;
+create policy "Allow authenticated insert fiscal settings"
+  on public.fiscal_settings for insert
   to authenticated
-  using (true)
-  with check (true);
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update fiscal settings" on public.fiscal_settings;
+create policy "Allow authenticated update fiscal settings"
+  on public.fiscal_settings for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete fiscal settings" on public.fiscal_settings;
+create policy "Allow authenticated delete fiscal settings"
+  on public.fiscal_settings for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read assets" on public.assets;
 create policy "Allow authenticated read assets"
   on public.assets for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated write assets" on public.assets;
-create policy "Allow authenticated write assets"
-  on public.assets for all
+drop policy if exists "Allow authenticated insert assets" on public.assets;
+create policy "Allow authenticated insert assets"
+  on public.assets for insert
   to authenticated
-  using (true)
-  with check (true);
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update assets" on public.assets;
+create policy "Allow authenticated update assets"
+  on public.assets for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete assets" on public.assets;
+create policy "Allow authenticated delete assets"
+  on public.assets for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read logs" on public.audit_logs;
 create policy "Allow authenticated read logs"
   on public.audit_logs for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);
 
 drop policy if exists "Allow authenticated read attachments" on public.attachments;
 create policy "Allow authenticated read attachments"
   on public.attachments for select
   to authenticated
-  using (true);
+  using ((select auth.uid()) is not null);

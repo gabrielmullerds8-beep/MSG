@@ -48,6 +48,7 @@ import {
   fiscalConfig,
   formatCurrency,
   getCfopCode,
+  invoiceFinancialAmount,
   invoiceConsidersCost,
   invoiceConsidersSale,
   invoiceHasFinancialEffect,
@@ -56,7 +57,7 @@ import {
 } from "./data";
 import { useFiscalStore } from "./store";
 import { isSupabaseConfigured, supabase } from "./supabase";
-import { AssetItem, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party } from "./types";
+import { AssetItem, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party, PaymentInstallment } from "./types";
 
 type View =
   | "dashboard"
@@ -115,6 +116,7 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.pisRate = Number(nextConfig.pisRate ?? fiscalConfig.pisRate);
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
   fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
+  fiscalConfig.bankBalance = Number(nextConfig.bankBalance ?? fiscalConfig.bankBalance ?? 0);
   fiscalConfig.cfops = [...(nextConfig.cfops || fiscalConfig.cfops)];
   fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}), ...(nextConfig.cfopRules || {}) };
   fiscalConfig.csts = [...(nextConfig.csts || fiscalConfig.csts)];
@@ -334,17 +336,39 @@ const productLabel = (item: InvoiceItem) => {
 };
 
 const invoiceProductEntries = (invoice: Invoice) => {
+  const pfValue = Number(invoice.pfValue || 0);
   if (!invoice.items?.length) {
-    return [{ name: "Produto sem descrição", value: invoice.totalInvoice }];
+    return [{ name: "Produto sem descrição", value: invoiceFinancialAmount(invoice) }];
   }
 
+  const itemsTotal = invoice.items.reduce((total, item) => total + Number(item.totalValue || 0), 0) || invoice.totalInvoice || 1;
   return invoice.items.map((item) => ({
     name: productLabel(item),
-    value: Number(item.totalValue || invoice.totalInvoice || 0),
+    value: Number(item.totalValue || invoice.totalInvoice || 0) + pfValue * (Number(item.totalValue || 0) / itemsTotal),
   }));
 };
 
 const invoiceDate = (invoice: Invoice) => (invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate);
+const invoiceInstallments = (invoice: Invoice): PaymentInstallment[] =>
+  invoice.financialInstallments?.length
+    ? invoice.financialInstallments
+    : [
+        {
+          id: "parcela_1",
+          paymentCondition: invoice.paymentCondition,
+          paymentMethod: invoice.paymentMethod,
+          dueDate: invoice.dueDate || invoice.issueDate,
+          amount: invoice.totalInvoice,
+          pfValue: Number(invoice.pfValue || 0),
+          paid: invoice.paid,
+          paymentDate: invoice.paymentDate,
+          notes: invoice.internalNotes,
+        },
+      ];
+
+const installmentTotal = (installment: PaymentInstallment) =>
+  Number(installment.amount || 0) + Number(installment.pfValue || 0);
+
 const withinDateRange = (date: string | undefined, start: string, end: string) => {
   if (!date) return false;
   const value = date.slice(0, 10);
@@ -849,7 +873,7 @@ function Dashboard({
       .filter(invoiceConsidersSale)
       .reduce<Record<string, { name: string; value: number }>>((acc, invoice) => {
         acc[invoice.partyName] ||= { name: invoice.partyName, value: 0 };
-        acc[invoice.partyName].value += invoice.totalInvoice;
+        acc[invoice.partyName].value += invoiceFinancialAmount(invoice);
         return acc;
       }, {}),
   );
@@ -870,7 +894,7 @@ function Dashboard({
       .reduce<Record<string, { month: string; faturamento: number }>>((acc, invoice) => {
         const key = invoice.issueDate.slice(0, 7);
         acc[key] ||= { month: `${key.slice(5, 7)}/${key.slice(0, 4)}`, faturamento: 0 };
-        acc[key].faturamento += invoice.totalInvoice;
+        acc[key].faturamento += invoiceFinancialAmount(invoice);
         return acc;
       }, {}),
   );
@@ -1007,7 +1031,7 @@ function InvoiceRows({
   showPf?: boolean;
   actions?: (invoice: Invoice) => React.ReactNode;
 }) {
-  const showPfValue = !compact && (showPf || invoices.some((invoice) => invoice.invoiceType === "issued"));
+  const showPfValue = !compact && (showPf || invoices.some((invoice) => Number(invoice.pfValue || 0) > 0));
 
   return (
     <table>
@@ -1035,7 +1059,7 @@ function InvoiceRows({
             <td>{invoice.mainCfop}</td>
             {!compact && <td>{invoice.items[0]?.ncm}</td>}
             <td>{formatCurrency(invoice.totalInvoice)}</td>
-            {showPfValue && <td>{invoice.invoiceType === "issued" ? formatCurrency(invoice.pfValue || 0) : "-"}</td>}
+            {showPfValue && <td>{formatCurrency(invoice.pfValue || 0)}</td>}
             <td>{formatCurrency(invoice.invoiceType === "received" ? invoice.icmsCreditValue : invoice.icmsValue)}</td>
             <td>{invoice.hasLinkedOperation ? "Sim" : "Não"}</td>
             <td>
@@ -1100,7 +1124,7 @@ function InvoiceDetailPanel({ invoice, onClose }: { invoice: Invoice; onClose: (
         <StatCard title="Data" value={formatDate(invoice.entryDate || invoice.issueDate)} />
         <StatCard title="CFOP" value={invoice.mainCfop} />
         <StatCard title="Valor total" value={formatCurrency(invoice.totalInvoice)} />
-        {invoice.invoiceType === "issued" && <StatCard title="Valor PF" value={formatCurrency(invoice.pfValue || 0)} />}
+        <StatCard title="Valor PF" value={formatCurrency(invoice.pfValue || 0)} />
         <StatCard title="Parte" value={invoice.partyName || "-"} />
         <StatCard title="CNPJ/CPF" value={invoice.partyCnpj || "-"} />
         <StatCard title="Transportadora" value={invoice.carrierName || "-"} />
@@ -1239,7 +1263,7 @@ function InvoiceList({
                   cfop: invoice.mainCfop,
                   ncm: invoice.items[0]?.ncm,
                   valor: invoice.totalInvoice,
-                  valorPf: invoice.invoiceType === "issued" ? invoice.pfValue || 0 : "",
+                  valorPf: invoice.pfValue || 0,
                   icms: invoice.invoiceType === "issued" ? invoice.icmsValue : invoice.icmsCreditValue,
                   status: invoice.status,
                 })),
@@ -1253,7 +1277,7 @@ function InvoiceList({
         <div className="table-wrap">
           <InvoiceRows
             invoices={filtered}
-            showPf={type === "issued"}
+            showPf
             actions={(invoice) => (
               <div className="row-actions">
                 <button className="icon-btn" title="Visualizar" onClick={() => onOpen(invoice)}>
@@ -1322,19 +1346,38 @@ function InvoiceForm({
   const [itemIndexes, setItemIndexes] = useState(
     editingInvoice?.items?.length ? editingInvoice.items.map((_, index) => index) : [0],
   );
+  const [installmentIndexes, setInstallmentIndexes] = useState(
+    editingInvoice?.financialInstallments?.length ? editingInvoice.financialInstallments.map((_, index) => index) : [0],
+  );
+  const [itemTotals, setItemTotals] = useState(() => ({
+    products: editingInvoice?.totalProducts || 0,
+    icms: editingInvoice?.icmsValue || editingInvoice?.icmsCreditValue || 0,
+    pis: editingInvoice?.pisValue || editingInvoice?.pisCreditValue || 0,
+    cofins: editingInvoice?.cofinsValue || editingInvoice?.cofinsCreditValue || 0,
+  }));
+  const [financePfTotal, setFinancePfTotal] = useState(
+    () => editingInvoice?.financialInstallments?.reduce((total, installment) => total + Number(installment.pfValue || 0), 0) || Number(editingInvoice?.pfValue || 0),
+  );
   const [selectedParty, setSelectedParty] = useState<Party | undefined>(() =>
     parties.find((party) => party.kind === (isReceived ? "supplier" : "customer") && (party.name === editingInvoice?.partyName || party.cnpj === editingInvoice?.partyCnpj)),
   );
   const [selectedCarrier, setSelectedCarrier] = useState<Party | undefined>(() =>
     parties.find((party) => party.kind === "carrier" && party.name === editingInvoice?.carrierName),
   );
-  const [thirdPartyFreight, setThirdPartyFreight] = useState(false);
+  const [thirdPartyFreight, setThirdPartyFreight] = useState(
+    Boolean(editingInvoice?.carrierName?.includes("terceiros")) || (!editingInvoice?.freightValue && Boolean(editingInvoice)),
+  );
 
-  const recalcItemValues = (event: FormEvent<HTMLFormElement>) => {
-    const form = event.currentTarget;
+  const updateFormSummaries = (form: HTMLFormElement) => {
+    const formData = new FormData(form);
+    let products = 0;
+    let icms = 0;
+    let pis = 0;
+    let cofins = 0;
+
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
-      const quantity = cleanNumber(new FormData(form).get(`quantity${suffix}`));
+      const quantity = cleanNumber(formData.get(`quantity${suffix}`));
       const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
       const icmsBaseField = form.elements.namedItem(`icmsBase${suffix}`) as HTMLInputElement | null;
@@ -1350,6 +1393,7 @@ function InvoiceForm({
       if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
 
       const totalValue = cleanNumber(totalValueField?.value || null);
+      products += totalValue;
       const icmsBase = cleanNumber(icmsBaseField?.value || null) || totalValue;
       const icmsRate = cleanNumber(icmsRateField?.value || null);
       if (icmsBase && icmsRate && icmsValueField) icmsValueField.value = formatCurrency((icmsBase * icmsRate) / 100);
@@ -1359,7 +1403,18 @@ function InvoiceForm({
       const cofinsRate = cleanNumber(cofinsRateField?.value || null);
       if (pisBase && pisRate && pisValueField) pisValueField.value = formatCurrency((pisBase * pisRate) / 100);
       if (pisBase && cofinsRate && cofinsValueField) cofinsValueField.value = formatCurrency((pisBase * cofinsRate) / 100);
+      icms += cleanNumber(icmsValueField?.value || null);
+      pis += cleanNumber(pisValueField?.value || null);
+      cofins += cleanNumber(cofinsValueField?.value || null);
     });
+    setItemTotals({ products, icms, pis, cofins });
+    setFinancePfTotal(
+      installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
+    );
+  };
+
+  const recalcItemValues = (event: FormEvent<HTMLFormElement>) => {
+    updateFormSummaries(event.currentTarget);
   };
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -1372,6 +1427,25 @@ function InvoiceForm({
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const totalInvoice = totalProducts + freightValue;
+    const rawInstallments = installmentIndexes.map((index, position) => ({
+      id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
+      paymentCondition: String(form.get(`paymentCondition_${index}`) || ""),
+      paymentMethod: String(form.get(`paymentMethod_${index}`) || ""),
+      dueDate: String(form.get(`dueDate_${index}`) || todayIso()),
+      amount: cleanNumber(form.get(`installmentAmount_${index}`)),
+      pfValue: cleanNumber(form.get(`installmentPfValue_${index}`)),
+      paid: Boolean(editingInvoice?.financialInstallments?.[position]?.paid),
+      paymentDate: editingInvoice?.financialInstallments?.[position]?.paymentDate || "",
+      notes: editingInvoice?.financialInstallments?.[position]?.notes || "",
+    }));
+    const financialInstallments = rawInstallments.map((installment, index) => ({
+      ...installment,
+      amount: rawInstallments.length === 1 && installment.amount === 0 ? totalInvoice : installment.amount,
+      paymentCondition: installment.paymentCondition || (index === 0 ? editingInvoice?.paymentCondition || "A prazo" : "A prazo"),
+      paymentMethod: installment.paymentMethod || (index === 0 ? editingInvoice?.paymentMethod || "Boleto" : "Boleto"),
+    }));
+    const firstInstallment = financialInstallments[0];
+    const totalPfValue = financialInstallments.reduce((total, installment) => total + Number(installment.pfValue || 0), 0);
     const icmsBase = items.reduce((total, item) => total + item.icmsBase, 0);
     const icmsValue = items.reduce((total, item) => total + item.icmsValue, 0);
     const icmsCreditValue = items.reduce((total, item) => total + (item.icmsCreditable ? item.icmsValue : 0), 0);
@@ -1405,13 +1479,13 @@ function InvoiceForm({
       natureOperation: "",
       mainCfop,
       purpose: "Normal",
-      paymentCondition: String(form.get("paymentCondition") || ""),
-      paymentMethod: String(form.get("paymentMethod") || ""),
-      dueDate: String(form.get("dueDate") || ""),
-      pfValue: isReceived ? 0 : cleanNumber(form.get("pfValue")),
+      paymentCondition: firstInstallment?.paymentCondition || "",
+      paymentMethod: firstInstallment?.paymentMethod || "",
+      dueDate: firstInstallment?.dueDate || "",
+      pfValue: totalPfValue,
       carrierName: String(form.get("carrierName") || ""),
-      paymentDate: "",
-      paid: false,
+      paymentDate: editingInvoice?.paymentDate || "",
+      paid: Boolean(editingInvoice?.paid),
       status: String(form.get("status") || "Lancada") as Invoice["status"],
       category: items[0]?.category || "",
       costCenter: items[0]?.costCenter || "",
@@ -1444,6 +1518,7 @@ function InvoiceForm({
       createdAt: editingInvoice?.createdAt || now,
       updatedAt: now,
       items,
+      financialInstallments,
     };
 
     onSave(invoice);
@@ -1613,17 +1688,23 @@ function InvoiceForm({
             </article>
           ))}
         </div>
+        <div className="item-totals-grid">
+          <StatCard title="Total produtos" value={formatCurrency(itemTotals.products)} tone="info" />
+          <StatCard title="Total ICMS" value={formatCurrency(itemTotals.icms)} tone="danger" />
+          <StatCard title="Total PIS" value={formatCurrency(itemTotals.pis)} tone="warn" />
+          <StatCard title="Total COFINS" value={formatCurrency(itemTotals.cofins)} tone="warn" />
+        </div>
       </section>
 
       <section className="split-grid">
         <section className="panel">
           <h2>Transporte</h2>
+          <label className="check transport-third-party">
+            <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
+            Frete por conta de terceiros
+          </label>
           <div className="form-grid compact">
             <MoneyField label="Valor frete" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
-            <label className="check">
-              <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
-              Frete por conta de terceiros
-            </label>
             <PartySelect
               label="Transportadora"
               name="carrierId"
@@ -1639,12 +1720,45 @@ function InvoiceForm({
         </section>
 
         <section className="panel">
-          <h2>Financeiro</h2>
-          <div className="form-grid compact">
-            <Field label="Forma de pagamento" name="paymentCondition" defaultValue={editingInvoice?.paymentCondition || "A prazo"} />
-            <Field label="Meio de pagamento" name="paymentMethod" defaultValue={editingInvoice?.paymentMethod || "Boleto"} />
-            <Field label="Vencimento" name="dueDate" type="date" defaultValue={editingInvoice?.dueDate || ""} />
-            {!isReceived && <MoneyField label="Valor PF" name="pfValue" defaultValue={formatCurrency(editingInvoice?.pfValue || 0)} />}
+          <div className="panel-title between">
+            <h2>Financeiro</h2>
+            <button
+              className="icon-btn"
+              type="button"
+              title="Adicionar parcela"
+              onClick={() => setInstallmentIndexes((current) => [...current, Math.max(...current) + 1])}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+          <div className="installments-stack">
+            {installmentIndexes.map((installmentIndex, position) => {
+              const installment = editingInvoice?.financialInstallments?.[position];
+              return (
+                <article className="installment-row" key={installmentIndex}>
+                  <strong>Parcela {position + 1}</strong>
+                  <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} defaultValue={installment?.paymentCondition || editingInvoice?.paymentCondition || "A prazo"} />
+                  <Field label="Meio de pagamento" name={`paymentMethod_${installmentIndex}`} defaultValue={installment?.paymentMethod || editingInvoice?.paymentMethod || "Boleto"} />
+                  <Field label="Vencimento" name={`dueDate_${installmentIndex}`} type="date" defaultValue={installment?.dueDate || editingInvoice?.dueDate || ""} />
+                  <MoneyField label="Valor da parcela" name={`installmentAmount_${installmentIndex}`} defaultValue={formatCurrency(installment?.amount || (position === 0 ? editingInvoice?.totalInvoice || 0 : 0))} autoCalc />
+                  <MoneyField label="Valor PF" name={`installmentPfValue_${installmentIndex}`} defaultValue={formatCurrency(installment?.pfValue || (position === 0 && !editingInvoice?.financialInstallments?.length ? editingInvoice?.pfValue || 0 : 0))} autoCalc />
+                  {installmentIndexes.length > 1 && (
+                    <button
+                      className="icon-btn danger"
+                      type="button"
+                      title="Remover parcela"
+                      onClick={() => setInstallmentIndexes((current) => current.filter((value) => value !== installmentIndex))}
+                    >
+                      <X size={16} />
+                    </button>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+          <div className="finance-pf-total">
+            <span>Total PF</span>
+            <strong>{formatCurrency(financePfTotal)}</strong>
           </div>
         </section>
       </section>
@@ -1697,6 +1811,11 @@ function InvoiceForm({
 
       {canEdit && (
         <div className="form-actions">
+          {isEditing && (
+            <ActionButton icon={X} variant="ghost" onClick={onDone}>
+              Cancelar
+            </ActionButton>
+          )}
           <ActionButton icon={Save} type="submit">
             {isEditing ? "Salvar alterações" : "Salvar nota"}
           </ActionButton>
@@ -1948,12 +2067,28 @@ function TaxDetailCard({
   );
 }
 
-function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPaid: (invoice: Invoice, paymentDate: string) => void }) {
+function FinancialView({
+  invoices,
+  onSave,
+  bankBalanceValue,
+  onBankBalanceSave,
+}: {
+  invoices: Invoice[];
+  onSave: (invoice: Invoice) => void;
+  bankBalanceValue: number;
+  onBankBalanceSave: (value: number) => void;
+}) {
   const today = todayIso();
   const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
   const [endDate, setEndDate] = useState(today);
   const [listType, setListType] = useState<"all" | "receivable" | "payable">("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "paid">("open");
+  const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
+  const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setBankBalance(formatCurrency(bankBalanceValue));
+  }, [bankBalanceValue]);
   const addDays = (days: number) => {
     const date = new Date(`${today}T00:00:00`);
     date.setDate(date.getDate() + days);
@@ -1963,78 +2098,154 @@ function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPa
     const dueDate = invoice.dueDate || invoice.issueDate;
     return (!startDate || dueDate >= startDate) && (!endDate || dueDate <= endDate);
   };
-  const payables = invoices.filter((invoice) => invoiceConsidersCost(invoice) && !invoice.paid && byPeriod(invoice));
-  const receivables = invoices.filter((invoice) => invoiceConsidersSale(invoice) && !invoice.paid && byPeriod(invoice));
-  const inRange = (invoice: Invoice, days: number) => {
-    const dueDate = invoice.dueDate || invoice.issueDate;
+  type FinancialEntry = {
+    id: string;
+    invoice: Invoice;
+    installment: PaymentInstallment;
+    kind: "receivable" | "payable";
+  };
+  const allEntries = invoices.flatMap((invoice) => {
+    const kind: FinancialEntry["kind"] | null = invoiceConsidersSale(invoice)
+      ? "receivable"
+      : invoiceConsidersCost(invoice)
+        ? "payable"
+        : null;
+    if (!kind) return [];
+    return invoiceInstallments(invoice).map((installment) => ({
+      id: `${invoice.id}_${installment.id}`,
+      invoice,
+      installment,
+      kind,
+    }));
+  });
+  const byEntryPeriod = (entry: FinancialEntry) =>
+    (!startDate || entry.installment.dueDate >= startDate) && (!endDate || entry.installment.dueDate <= endDate);
+  const byEntryStatus = (entry: FinancialEntry) => {
+    if (statusFilter === "paid") return entry.installment.paid;
+    if (statusFilter === "open") return !entry.installment.paid;
+    return true;
+  };
+  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry));
+  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry));
+  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entry.installment.paid && byEntryPeriod(entry));
+  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entry.installment.paid && byEntryPeriod(entry));
+  const inRange = (entry: FinancialEntry, days: number) => {
+    const dueDate = entry.installment.dueDate;
     return dueDate >= today && dueDate <= addDays(days);
   };
-  const sumTotal = (items: Invoice[]) => items.reduce((total, invoice) => total + invoice.totalInvoice, 0);
+  const sumTotal = (items: FinancialEntry[]) => items.reduce((total, entry) => total + installmentTotal(entry.installment), 0);
   const flowParts = (days: number) => ({
-    receive: sumTotal(receivables.filter((invoice) => inRange(invoice, days))),
-    pay: sumTotal(payables.filter((invoice) => inRange(invoice, days))),
+    receive: sumTotal(openReceivables.filter((invoice) => inRange(invoice, days))),
+    pay: sumTotal(openPayables.filter((invoice) => inRange(invoice, days))),
   });
   const flow30Parts = flowParts(30);
   const flow60Parts = flowParts(60);
   const flow90Parts = flowParts(90);
-  const flow30 = flow30Parts.receive - flow30Parts.pay;
-  const flow60 = flow60Parts.receive - flow60Parts.pay;
-  const flow90 = flow90Parts.receive - flow90Parts.pay;
-  const monthKey = (invoice: Invoice) => (invoice.dueDate || invoice.issueDate).slice(0, 7);
+  const currentBankBalance = cleanNumber(bankBalance);
+  const flow30 = currentBankBalance + flow30Parts.receive - flow30Parts.pay;
+  const flow60 = currentBankBalance + flow60Parts.receive - flow60Parts.pay;
+  const flow90 = currentBankBalance + flow90Parts.receive - flow90Parts.pay;
+  const monthKey = (entry: FinancialEntry) => entry.installment.dueDate.slice(0, 7);
   const monthlyKeys = Array.from(new Set([...payables, ...receivables].map(monthKey))).sort();
-  const flowChart = [
-    { name: "A receber", value: flow30Parts.receive, color: "#16a34a" },
-    { name: "A pagar", value: flow30Parts.pay, color: "#dc2626" },
+  const receiveFlowChart = [
+    { name: "Saldo atual", value: Math.max(currentBankBalance, 0), color: "#2563eb" },
+    { name: "30 dias", value: flow30Parts.receive, color: "#16a34a" },
+    { name: "60 dias", value: Math.max(flow60Parts.receive - flow30Parts.receive, 0), color: "#22c55e" },
+    { name: "90 dias", value: Math.max(flow90Parts.receive - flow60Parts.receive, 0), color: "#86efac" },
   ];
-  const flowChart60 = [
-    { name: "A receber", value: flow60Parts.receive, color: "#16a34a" },
-    { name: "A pagar", value: flow60Parts.pay, color: "#dc2626" },
-  ];
-  const flowChart90 = [
-    { name: "A receber", value: flow90Parts.receive, color: "#16a34a" },
-    { name: "A pagar", value: flow90Parts.pay, color: "#dc2626" },
+  const payFlowChart = [
+    { name: "Saldo atual", value: Math.max(currentBankBalance, 0), color: "#2563eb" },
+    { name: "30 dias", value: flow30Parts.pay, color: "#dc2626" },
+    { name: "60 dias", value: Math.max(flow60Parts.pay - flow30Parts.pay, 0), color: "#f97316" },
+    { name: "90 dias", value: Math.max(flow90Parts.pay - flow60Parts.pay, 0), color: "#fdba74" },
   ];
   const visiblePayables = listType === "receivable" ? [] : payables;
   const visibleReceivables = listType === "payable" ? [] : receivables;
-  const markPaid = (invoice: Invoice) => {
-    const paymentDate = paymentDates[invoice.id] || today;
+  const updateInstallment = (entry: FinancialEntry, changes: Partial<PaymentInstallment>) => {
+    const installments = invoiceInstallments(entry.invoice).map((installment) =>
+      installment.id === entry.installment.id ? { ...installment, ...changes } : installment,
+    );
+    const firstInstallment = installments[0];
+    onSave({
+      ...entry.invoice,
+      financialInstallments: installments,
+      paid: installments.every((installment) => installment.paid),
+      paymentDate: installments.every((installment) => installment.paid) ? changes.paymentDate || entry.invoice.paymentDate : "",
+      dueDate: firstInstallment?.dueDate || entry.invoice.dueDate,
+      paymentCondition: firstInstallment?.paymentCondition || entry.invoice.paymentCondition,
+      paymentMethod: firstInstallment?.paymentMethod || entry.invoice.paymentMethod,
+      pfValue: installments.reduce((total, installment) => total + Number(installment.pfValue || 0), 0),
+      updatedAt: new Date().toISOString(),
+    });
+  };
+  const markPaid = (entry: FinancialEntry) => {
+    const paymentDate = paymentDates[entry.id] || today;
     if (window.confirm("Tem certeza que deseja marcar este lançamento como pago?")) {
-      onMarkPaid(invoice, paymentDate);
+      updateInstallment(entry, {
+        paid: true,
+        paymentDate,
+        notes: financialNotes[entry.id] ?? entry.installment.notes,
+      });
     }
   };
-  const renderRows = (items: Invoice[], partyLabel: string) => (
+  const reopenPayment = (entry: FinancialEntry) => {
+    if (window.confirm("Tem certeza que deseja remover o pagamento deste lançamento?")) {
+      updateInstallment(entry, {
+        paid: false,
+        paymentDate: "",
+        notes: financialNotes[entry.id] ?? entry.installment.notes,
+      });
+    }
+  };
+  const saveFinancialNote = (entry: FinancialEntry) => {
+    const note = financialNotes[entry.id] ?? entry.installment.notes ?? "";
+    if (note !== (entry.installment.notes || "")) {
+      updateInstallment(entry, { notes: note });
+    }
+  };
+  const renderRows = (items: FinancialEntry[], partyLabel: string, paymentDateLabel: string) => (
     <table className="static-table">
       <thead>
         <tr>
           <th>{partyLabel}</th>
           <th>Vencimento</th>
           <th>Valor</th>
-          <th>Data de pagamento</th>
+          <th>{paymentDateLabel}</th>
           <th>Pago</th>
+          <th>Observações</th>
         </tr>
       </thead>
       <tbody>
-        {items.map((invoice) => (
-          <tr key={invoice.id}>
-            <td>{invoice.partyName}</td>
-            <td>{formatDate(invoice.dueDate || invoice.issueDate)}</td>
-            <td>{formatCurrency(invoice.totalInvoice)}</td>
+        {items.map((entry) => (
+          <tr key={entry.id}>
+            <td>{entry.invoice.partyName}</td>
+            <td>{formatDate(entry.installment.dueDate)}</td>
+            <td>{formatCurrency(installmentTotal(entry.installment))}</td>
             <td>
               <input
                 className="compact-input"
                 type="date"
-                value={paymentDates[invoice.id] || today}
-                onChange={(event) => setPaymentDates((current) => ({ ...current, [invoice.id]: event.target.value }))}
+                value={paymentDates[entry.id] || entry.installment.paymentDate || today}
+                onChange={(event) => setPaymentDates((current) => ({ ...current, [entry.id]: event.target.value }))}
               />
             </td>
             <td>
-              <input type="checkbox" checked={false} onChange={() => markPaid(invoice)} />
+              <input type="checkbox" checked={entry.installment.paid} onChange={() => (entry.installment.paid ? reopenPayment(entry) : markPaid(entry))} />
+            </td>
+            <td>
+              <input
+                className="compact-input"
+                value={financialNotes[entry.id] ?? entry.installment.notes ?? ""}
+                onChange={(event) => setFinancialNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
+                onBlur={() => saveFinancialNote(entry)}
+                placeholder="Livre"
+              />
             </td>
           </tr>
         ))}
         {!items.length && (
           <tr>
-            <td colSpan={5}>Nenhum lançamento em aberto no período.</td>
+            <td colSpan={6}>Nenhum lançamento no período.</td>
           </tr>
         )}
       </tbody>
@@ -2061,29 +2272,52 @@ function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPa
               <option value="payable">A pagar</option>
             </select>
           </label>
+          <label className="field">
+            <span>Situação</span>
+            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option value="all">Todos</option>
+              <option value="open">Em aberto</option>
+              <option value="paid">Pagos</option>
+            </select>
+          </label>
         </div>
       </section>
       <section className="stats-grid">
         <StatCard title="Total contas a receber" value={formatCurrency(sumTotal(receivables))} tone="good" />
         <StatCard title="Total contas a pagar" value={formatCurrency(sumTotal(payables))} tone="danger" />
+        <section className="stat info bank-balance-card">
+          <span>Saldo bancário atual</span>
+          <input
+            value={bankBalance}
+            onChange={(event) => {
+              setBankBalance(event.target.value);
+            }}
+            onBlur={(event) => {
+              const value = cleanNumber(event.target.value);
+              const formatted = formatCurrency(value);
+              setBankBalance(formatted);
+              onBankBalanceSave(value);
+            }}
+            placeholder="R$ 0,00"
+          />
+        </section>
         <StatCard title="Fluxo 30 dias" value={formatCurrency(flow30)} tone={flow30 >= 0 ? "good" : "danger"} />
         <StatCard title="Fluxo 60 dias" value={formatCurrency(flow60)} tone={flow60 >= 0 ? "good" : "danger"} />
         <StatCard title="Fluxo 90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
       </section>
       <section className="split-grid">
-        {!!visiblePayables.length || listType !== "receivable" ? <section className="panel">
-          <h2>Contas a pagar</h2>
-          {renderRows(visiblePayables, "Fornecedor")}
-        </section> : null}
         {!!visibleReceivables.length || listType !== "payable" ? <section className="panel">
           <h2>Contas a receber</h2>
-          {renderRows(visibleReceivables, "Cliente")}
+          {renderRows(visibleReceivables, "Cliente", "Data de recebimento")}
+        </section> : null}
+        {!!visiblePayables.length || listType !== "receivable" ? <section className="panel">
+          <h2>Contas a pagar</h2>
+          {renderRows(visiblePayables, "Fornecedor", "Data de pagamento")}
         </section> : null}
       </section>
-      <section className="triple-grid">
-        <FinancePie title="Fluxo 30 dias" data={flowChart} />
-        <FinancePie title="Fluxo 60 dias" data={flowChart60} />
-        <FinancePie title="Fluxo 90 dias" data={flowChart90} />
+      <section className="split-grid">
+        <FinancePie title="Fluxo a receber" data={receiveFlowChart} />
+        <FinancePie title="Fluxo a pagar" data={payFlowChart} />
       </section>
       <section className="stats-grid">
         {monthlyKeys.map((key) => {
@@ -2092,8 +2326,8 @@ function FinancialView({ invoices, onMarkPaid }: { invoices: Invoice[]; onMarkPa
           return (
             <StatCard
               key={key}
-              title={`Resultado ${key.slice(5, 7)}/${key.slice(0, 4)}`}
-              value={`${formatCurrency(receive)} / ${formatCurrency(pay)}`}
+              title={`Mês ${key.slice(5, 7)}/${key.slice(0, 4)}`}
+              value={`Receber: ${formatCurrency(receive)} | Pagar: ${formatCurrency(pay)}`}
               tone={receive >= pay ? "good" : "danger"}
             />
           );
@@ -2110,7 +2344,7 @@ function FinancePie({ title, data }: { title: string; data: Array<{ name: string
       <h2>{title}</h2>
       <ResponsiveContainer width="100%" height={220}>
         <PieChart>
-          <Pie data={chartData} dataKey="value" nameKey="name" outerRadius={72} label>
+          <Pie data={chartData} dataKey="value" nameKey="name" outerRadius={68}>
             {chartData.map((entry) => (
               <Cell key={entry.name} fill={entry.color} />
             ))}
@@ -2123,7 +2357,8 @@ function FinancePie({ title, data }: { title: string; data: Array<{ name: string
   );
 }
 
-const assetTypeOptions = ["Máquinas", "Caminhões", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
+const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
+const assetTypesWithPlate = new Set(["Máquinas", "Caminhões", "Veículos"]);
 
 function AssetsView({
   assets,
@@ -2136,6 +2371,7 @@ function AssetsView({
 }) {
   const [showForm, setShowForm] = useState(false);
   const [editingAsset, setEditingAsset] = useState<AssetItem | null>(null);
+  const [selectedAssetType, setSelectedAssetType] = useState(editingAsset?.itemType || "");
   const visibleAssets = assets.filter((asset) => !asset.archived);
   const groupedAssets = assetTypeOptions.map((type) => ({
     type,
@@ -2145,6 +2381,7 @@ function AssetsView({
   function openEdit(asset: AssetItem) {
     if (!window.confirm("Tem certeza que deseja alterar este patrimônio?")) return;
     setEditingAsset(asset);
+    setSelectedAssetType(asset.itemType);
     setShowForm(true);
   }
 
@@ -2152,14 +2389,16 @@ function AssetsView({
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const now = new Date().toISOString();
+    const registrationNumber = String(form.get("registrationNumber") || "");
+    const registrationKinds = ["Matrícula", "Escritura", "CCIR"].filter((kind) => form.get(`registration${kind}`) === "on");
     const asset: AssetItem = {
       id: editingAsset?.id || newId("asset"),
       itemType: String(form.get("itemType") || ""),
       itemName: String(form.get("itemName") || ""),
       acquisitionDate: String(form.get("acquisitionDate") || todayIso()),
       acquisitionValue: cleanNumber(form.get("acquisitionValue")),
-      plate: String(form.get("plate") || ""),
-      registrationNumber: String(form.get("registrationNumber") || ""),
+      plate: assetTypesWithPlate.has(String(form.get("itemType") || "")) ? String(form.get("plate") || "") : "",
+      registrationNumber: registrationKinds.length && registrationNumber ? `${registrationKinds.join(" / ")}: ${registrationNumber}` : registrationNumber,
       archived: editingAsset?.archived || false,
       createdAt: editingAsset?.createdAt || now,
       updatedAt: now,
@@ -2200,6 +2439,7 @@ function AssetsView({
             type="button"
             onClick={() => {
               setEditingAsset(null);
+              setSelectedAssetType("");
               setShowForm((current) => !current);
             }}
           >
@@ -2209,18 +2449,53 @@ function AssetsView({
         </div>
         {showForm && (
           <form className="form-grid" onSubmit={saveAsset}>
-            <Field label="Tipo do item" name="itemType" options={assetTypeOptions} defaultValue={editingAsset?.itemType || ""} required />
+            <label className="field">
+              <span>Tipo do item</span>
+              <select
+                name="itemType"
+                value={selectedAssetType}
+                onChange={(event) => setSelectedAssetType(event.target.value)}
+                required
+              >
+                <option value="">Selecione</option>
+                {assetTypeOptions.map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </label>
             <Field label="Nome do item" name="itemName" defaultValue={editingAsset?.itemName || ""} required />
             <Field label="Data de aquisição" name="acquisitionDate" type="date" defaultValue={editingAsset?.acquisitionDate || todayIso()} required />
             <MoneyField label="Valor de aquisição" name="acquisitionValue" defaultValue={formatCurrency(editingAsset?.acquisitionValue || 0)} />
-            <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />
-            <Field label="Número de matrícula" name="registrationNumber" defaultValue={editingAsset?.registrationNumber || ""} />
+            {assetTypesWithPlate.has(selectedAssetType) && <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />}
+            <label className="field registration-field">
+              <span>Número da matrícula, escritura ou CCIR</span>
+              <input name="registrationNumber" defaultValue={editingAsset?.registrationNumber?.replace(/^(Matrícula|Escritura|CCIR)( \/ (Matrícula|Escritura|CCIR))*: /, "") || ""} />
+              <div className="mini-check-row">
+                {["Matrícula", "Escritura", "CCIR"].map((kind) => (
+                  <label key={kind}>
+                    <input name={`registration${kind}`} type="checkbox" defaultChecked={editingAsset?.registrationNumber?.includes(kind)} />
+                    {kind}
+                  </label>
+                ))}
+              </div>
+            </label>
             <div className="form-actions inline">
               <ActionButton icon={Save} type="submit">
                 {editingAsset ? "Salvar alteração" : "Salvar patrimônio"}
               </ActionButton>
               {editingAsset && (
                 <>
+                  <ActionButton
+                    icon={X}
+                    variant="ghost"
+                    onClick={() => {
+                      setEditingAsset(null);
+                      setSelectedAssetType("");
+                      setShowForm(false);
+                    }}
+                  >
+                    Cancelar
+                  </ActionButton>
                   <ActionButton icon={Archive} variant="ghost" onClick={archiveAsset}>
                     Arquivar item
                   </ActionButton>
@@ -2268,8 +2543,11 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const [startDate, setStartDate] = useState(todayIso().slice(0, 7) + "-01");
   const [endDate, setEndDate] = useState(todayIso());
   const [showAdjust, setShowAdjust] = useState(false);
+  const [showRevenueAdjust, setShowRevenueAdjust] = useState(false);
   const [simulatedCosts, setSimulatedCosts] = useState("");
   const [simulatedExpenses, setSimulatedExpenses] = useState("");
+  const [simulatedGrossRevenue, setSimulatedGrossRevenue] = useState("");
+  const [simulatedTaxes, setSimulatedTaxes] = useState("");
   const inPeriod = (invoice: Invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return (!startDate || date >= startDate) && (!endDate || date <= endDate);
@@ -2277,12 +2555,16 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const issued = invoices.filter((invoice) => invoiceConsidersSale(invoice) && inPeriod(invoice));
   const received = invoices.filter((invoice) => invoiceConsidersCost(invoice) && inPeriod(invoice));
   const sum = (items: Invoice[], selector: (invoice: Invoice) => number) => items.reduce((total, invoice) => total + selector(invoice), 0);
-  const grossRevenue = sum(issued, (invoice) => invoice.totalInvoice);
-  const taxes = sum(issued, (invoice) => invoice.icmsValue + invoice.pisValue + invoice.cofinsValue + invoice.cfemValue);
-  const automaticCosts = sum(received, (invoice) => invoice.totalInvoice);
+  const grossRevenueAutomatic = sum(issued, invoiceFinancialAmount);
+  const taxesAutomatic = sum(issued, (invoice) => invoice.icmsValue + invoice.pisValue + invoice.cofinsValue + invoice.cfemValue);
+  const grossRevenue = simulatedGrossRevenue ? cleanNumber(simulatedGrossRevenue) : grossRevenueAutomatic;
+  const taxes = simulatedTaxes ? cleanNumber(simulatedTaxes) : taxesAutomatic;
+  const automaticCosts = sum(received, invoiceFinancialAmount);
   const automaticExpenses = 0;
   const costs = simulatedCosts ? cleanNumber(simulatedCosts) : automaticCosts;
   const expenses = simulatedExpenses ? cleanNumber(simulatedExpenses) : automaticExpenses;
+  const issuedPfTotal = sum(issued, (invoice) => Number(invoice.pfValue || 0));
+  const receivedPfTotal = sum(received, (invoice) => Number(invoice.pfValue || 0));
   const profit = grossRevenue - taxes - costs - expenses;
   const dreChart = [
     { name: "Impostos", value: Math.max(taxes, 0), color: "#dc2626" },
@@ -2304,13 +2586,32 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
             <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
           </label>
         </div>
-        <ActionButton icon={Settings} variant="ghost" onClick={() => setShowAdjust((current) => !current)}>
-          Ajustar Custos e Despesas
-        </ActionButton>
+        <div className="dre-toolbar-actions">
+          <section className="pf-mini-card">
+            <strong>Total PF</strong>
+            <span>Faturado: {formatCurrency(issuedPfTotal)}</span>
+            <span>Compras: {formatCurrency(receivedPfTotal)}</span>
+          </section>
+          <ActionButton icon={Settings} variant="ghost" onClick={() => setShowAdjust((current) => !current)}>
+            Ajustar Custos e Despesas
+          </ActionButton>
+          <ActionButton icon={Settings} variant="ghost" onClick={() => setShowRevenueAdjust((current) => !current)}>
+            Ajustar Receita Bruta e Impostos
+          </ActionButton>
+        </div>
       </section>
+      {showRevenueAdjust && (
+        <section className="panel">
+          <h2>Simulação de receita e impostos</h2>
+          <div className="form-grid">
+            <MoneyField label="Receita bruta simulada" name="simulatedGrossRevenue" defaultValue={grossRevenue} onChangeValue={setSimulatedGrossRevenue} />
+            <MoneyField label="Impostos simulados" name="simulatedTaxes" defaultValue={taxes} onChangeValue={setSimulatedTaxes} />
+          </div>
+        </section>
+      )}
       {showAdjust && (
         <section className="panel">
-          <h2>Simulação visual</h2>
+          <h2>Simulação de custos e despesas</h2>
           <div className="form-grid">
             <MoneyField label="Custos simulados" name="simulatedCosts" defaultValue={costs} onChangeValue={setSimulatedCosts} />
             <MoneyField label="Despesas simuladas" name="simulatedExpenses" defaultValue={expenses} onChangeValue={setSimulatedExpenses} />
@@ -2331,7 +2632,7 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
         <h2>DRE em gráfico</h2>
         <ResponsiveContainer width="100%" height={300}>
           <PieChart>
-            <Pie data={dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]} dataKey="value" nameKey="name" outerRadius={105} label>
+            <Pie data={dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]} dataKey="value" nameKey="name" outerRadius={92}>
               {(dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]).map((entry) => (
                 <Cell key={entry.name} fill={entry.color} />
               ))}
@@ -2731,42 +3032,48 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
             </div>
           </form>
         )}
-        <div className="tag-list">
+        <div className="settings-list-grid">
           {([
-            ["cfops", configSnapshot.cfops],
-            ["csts", configSnapshot.csts],
-            ["ncms", configSnapshot.ncms],
-            ["categories", configSnapshot.categories],
-            ["costCenters", configSnapshot.costCenters],
-            ["linkedTypes", configSnapshot.linkedTypes],
-            ["units", configSnapshot.units || unitOptions],
-          ] as Array<[FiscalConfigListName, string[]]>).flatMap(([listName, list]) =>
-            list.map((item, index) => (
-              <span className="tag-item" key={`${listName}-${item}-${index}`}>
-                {item}
-                {listName === "cfops" && (
-                  <span className="cfop-rule-badges">
-                    {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale && <small className="rule-badge sale">Venda</small>}
-                    {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && <small className="rule-badge cost">Custo</small>}
-                    {!configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale &&
-                      !configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && (
-                        <small className="rule-badge neutral">Sem efeito financeiro</small>
-                      )}
+            ["cfops", "CFOP", configSnapshot.cfops],
+            ["csts", "CST", configSnapshot.csts],
+            ["ncms", "NCM", configSnapshot.ncms],
+            ["categories", "Categorias", configSnapshot.categories],
+            ["costCenters", "Centro de custos", configSnapshot.costCenters],
+            ["linkedTypes", "Operações vinculadas", configSnapshot.linkedTypes],
+            ["units", "Unidades", configSnapshot.units || unitOptions],
+          ] as Array<[FiscalConfigListName, string, string[]]>).map(([listName, title, list]) => (
+            <section className="settings-list-group" key={listName}>
+              <h3>{title}</h3>
+              <div className="tag-list">
+                {list.map((item, index) => (
+                  <span className="tag-item" key={`${listName}-${item}-${index}`}>
+                    {item}
+                    {listName === "cfops" && (
+                      <span className="cfop-rule-badges">
+                        {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale && <small className="rule-badge sale">Venda</small>}
+                        {configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && <small className="rule-badge cost">Custo</small>}
+                        {!configSnapshot.cfopRules?.[getCfopCode(item)]?.considerSale &&
+                          !configSnapshot.cfopRules?.[getCfopCode(item)]?.considerCost && (
+                            <small className="rule-badge neutral">Sem efeito financeiro</small>
+                          )}
+                      </span>
+                    )}
+                    {canEdit && (
+                      <>
+                        <button className="edit-tag" type="button" title="Editar item" onClick={() => editConfigItem(listName, item)}>
+                          <Pencil size={12} />
+                        </button>
+                        <button type="button" title="Excluir item" onClick={() => deleteConfigItem(listName, item)}>
+                          <X size={13} />
+                        </button>
+                      </>
+                    )}
                   </span>
-                )}
-                {canEdit && (
-                  <>
-                    <button className="edit-tag" type="button" title="Editar item" onClick={() => editConfigItem(listName, item)}>
-                      <Pencil size={12} />
-                    </button>
-                    <button type="button" title="Excluir item" onClick={() => deleteConfigItem(listName, item)}>
-                      <X size={13} />
-                    </button>
-                  </>
-                )}
-              </span>
-            )),
-          )}
+                ))}
+                {!list.length && <p className="muted">Nenhum item cadastrado.</p>}
+              </div>
+            </section>
+          ))}
         </div>
       </section>
       <section className="panel">
@@ -2808,13 +3115,14 @@ export default function App() {
   const [view, setView] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [registryParties, setRegistryParties] = useState<Party[]>([]);
-  const [, setConfigVersion] = useState(0);
+  const [configVersion, setConfigVersion] = useState(0);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [registrationKind, setRegistrationKind] = useState<Party["kind"] | undefined>();
   const store = useFiscalStore();
 
   const title = useMemo(() => views.find((item) => item.id === view)?.label || "Dashboard", [view]);
   const canEdit = true;
+  const bankBalanceValue = useMemo(() => fiscalConfig.bankBalance || 0, [configVersion]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -2938,6 +3246,11 @@ export default function App() {
     setRegistrationKind(kind);
     setEditingInvoice(null);
     setView("registrations");
+  };
+  const saveBankBalance = async (value: number) => {
+    fiscalConfig.bankBalance = value;
+    setConfigVersion((current) => current + 1);
+    await saveFiscalConfig();
   };
 
   if (!logged) {
@@ -3077,7 +3390,14 @@ export default function App() {
           {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
-          {view === "financial" && <FinancialView invoices={store.invoices} onMarkPaid={store.markInvoicePaid} />}
+          {view === "financial" && (
+            <FinancialView
+              invoices={store.invoices}
+              onSave={store.saveInvoice}
+              bankBalanceValue={bankBalanceValue}
+              onBankBalanceSave={saveBankBalance}
+            />
+          )}
           {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}

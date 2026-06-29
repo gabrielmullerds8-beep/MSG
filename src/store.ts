@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoiceConsidersCost, invoiceConsidersSale } from "./data";
+import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount } from "./data";
 import { supabase } from "./supabase";
 import { AssetItem, Invoice, InvoiceItem, LinkedOperation } from "./types";
 
@@ -61,6 +61,7 @@ const invoiceToRow = (invoice: Invoice) => ({
   created_at: invoice.createdAt,
   updated_at: invoice.updatedAt,
   items: invoice.items,
+  financial_installments: invoice.financialInstallments || [],
 });
 
 const rowToInvoice = (row: Record<string, any>): Invoice => ({
@@ -121,6 +122,7 @@ const rowToInvoice = (row: Record<string, any>): Invoice => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
   items: (row.items || []) as InvoiceItem[],
+  financialInstallments: row.financial_installments || [],
 });
 
 const operationToRow = (op: LinkedOperation) => ({
@@ -460,8 +462,8 @@ export function useFiscalStore() {
   const totals = {
     issued,
     received,
-    revenue: sum(taxableIssued, "totalInvoice"),
-    purchases: sum(taxableReceived, "totalInvoice"),
+    revenue: taxableIssued.reduce((total, invoice) => total + invoiceFinancialAmount(invoice), 0),
+    purchases: taxableReceived.reduce((total, invoice) => total + invoiceFinancialAmount(invoice), 0),
     issuedCount: issued.length,
     receivedCount: received.length,
     icmsDebit: sum(taxableIssued, "icmsValue"),
@@ -478,7 +480,9 @@ export function useFiscalStore() {
         total + invoice.items.reduce((sub, item) => sub + Number(item.kilograms || 0), 0),
       0,
     ),
-    averageTicket: taxableIssued.length ? sum(taxableIssued, "totalInvoice") / taxableIssued.length : 0,
+    averageTicket: taxableIssued.length
+      ? taxableIssued.reduce((total, invoice) => total + invoiceFinancialAmount(invoice), 0) / taxableIssued.length
+      : 0,
   };
 
   return {

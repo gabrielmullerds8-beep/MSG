@@ -16,6 +16,7 @@ export const fiscalConfig: FiscalConfig = {
   pisRate: 1.65,
   cofinsRate: 7.6,
   cfemRate: 2,
+  bankBalance: 0,
   cfops: [
     "5101 - Venda de produção do estabelecimento",
     "5119 - Venda a ordem",
@@ -93,3 +94,6 @@ export const invoiceConsidersCost = (invoice: Invoice) =>
 
 export const invoiceHasFinancialEffect = (invoice: Invoice) =>
   invoiceConsidersSale(invoice) || invoiceConsidersCost(invoice);
+
+export const invoiceFinancialAmount = (invoice: Invoice) =>
+  Number(invoice.totalInvoice || 0) + Number(invoice.pfValue || 0);

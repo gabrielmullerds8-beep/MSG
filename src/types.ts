@@ -53,6 +53,18 @@ export interface InvoiceItem {
   notes?: string;
 }
 
+export interface PaymentInstallment {
+  id: string;
+  paymentCondition: string;
+  paymentMethod: string;
+  dueDate: string;
+  amount: number;
+  pfValue: number;
+  paid: boolean;
+  paymentDate?: string;
+  notes?: string;
+}
+
 export interface Invoice {
   id: string;
   companyId: string;
@@ -111,6 +123,7 @@ export interface Invoice {
   createdAt: string;
   updatedAt: string;
   items: InvoiceItem[];
+  financialInstallments?: PaymentInstallment[];
 }
 
 export interface LinkedOperation {
@@ -159,6 +172,7 @@ export interface FiscalConfig {
   pisRate: number;
   cofinsRate: number;
   cfemRate: number;
+  bankBalance?: number;
   cfops: string[];
   cfopRules?: Record<string, CfopRule>;
   csts: string[];
