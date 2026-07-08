@@ -29,6 +29,9 @@
   cost_center text,
   total_products numeric(14, 2) not null default 0,
   freight_value numeric(14, 2) not null default 0,
+  discount_value numeric(14, 2) not null default 0,
+  retention_type text,
+  retention_value numeric(14, 2) not null default 0,
   total_invoice numeric(14, 2) not null default 0,
   icms_base numeric(14, 2) not null default 0,
   icms_value numeric(14, 2) not null default 0,
@@ -67,6 +70,30 @@ alter table public.invoices
 
 alter table public.invoices
   add column if not exists financial_installments jsonb not null default '[]'::jsonb;
+
+alter table public.invoices
+  add column if not exists retention_type text;
+
+alter table public.invoices
+  add column if not exists retention_value numeric(14, 2) not null default 0;
+
+alter table public.invoices
+  add column if not exists discount_value numeric(14, 2) not null default 0;
+
+update public.invoices
+set financial_installments = (
+  select coalesce(
+    jsonb_agg(
+      case
+        when installment ? 'holder' then installment
+        else installment || jsonb_build_object('holder', 'Itaú')
+      end
+    ),
+    '[]'::jsonb
+  )
+  from jsonb_array_elements(coalesce(public.invoices.financial_installments, '[]'::jsonb)) as installment
+)
+where financial_installments is not null;
 
 create table if not exists public.linked_operations (
   id text primary key,
@@ -151,6 +178,34 @@ create table if not exists public.assets (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.cash_movements (
+  id text primary key,
+  movement_type text not null check (movement_type in ('entry', 'outflow', 'transfer')),
+  movement_date date not null,
+  holder text not null,
+  destination_holder text,
+  cost_center text,
+  destination_cost_center text,
+  history text,
+  amount numeric(14, 2) not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.products (
+  id text primary key,
+  name text not null,
+  ncm text,
+  default_cost_center text,
+  default_category text,
+  default_unit text,
+  accounting_account text,
+  color text,
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 drop table if exists public.allowed_users cascade;
 
 
@@ -161,12 +216,16 @@ create index if not exists attachments_invoice_id_idx on public.attachments(invo
 create index if not exists linked_operations_status_idx on public.linked_operations(status);
 create index if not exists parties_kind_name_idx on public.parties(kind, name);
 create index if not exists assets_archived_type_idx on public.assets(archived, item_type);
+create index if not exists cash_movements_date_holder_idx on public.cash_movements(movement_date, holder);
+create index if not exists products_name_idx on public.products(name);
 
 alter table public.invoices replica identity full;
 alter table public.linked_operations replica identity full;
 alter table public.parties replica identity full;
 alter table public.fiscal_settings replica identity full;
 alter table public.assets replica identity full;
+alter table public.cash_movements replica identity full;
+alter table public.products replica identity full;
 
 do $$
 begin
@@ -227,9 +286,35 @@ begin
     from pg_publication_tables
     where pubname = 'supabase_realtime'
       and schemaname = 'public'
+      and tablename = 'cash_movements'
+  ) then
+    alter publication supabase_realtime add table public.cash_movements;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
       and tablename = 'assets'
   ) then
     alter publication supabase_realtime add table public.assets;
+  end if;
+end $$;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'products'
+  ) then
+    alter publication supabase_realtime add table public.products;
   end if;
 end $$;
 
@@ -240,12 +325,16 @@ alter table public.attachments enable row level security;
 alter table public.parties enable row level security;
 alter table public.fiscal_settings enable row level security;
 alter table public.assets enable row level security;
+alter table public.cash_movements enable row level security;
+alter table public.products enable row level security;
 
 revoke all on table public.invoices from anon;
 revoke all on table public.linked_operations from anon;
 revoke all on table public.parties from anon;
 revoke all on table public.fiscal_settings from anon;
 revoke all on table public.assets from anon;
+revoke all on table public.cash_movements from anon;
+revoke all on table public.products from anon;
 revoke all on table public.audit_logs from anon;
 revoke all on table public.attachments from anon;
 revoke all on table public.invoices from authenticated;
@@ -253,6 +342,8 @@ revoke all on table public.linked_operations from authenticated;
 revoke all on table public.parties from authenticated;
 revoke all on table public.fiscal_settings from authenticated;
 revoke all on table public.assets from authenticated;
+revoke all on table public.cash_movements from authenticated;
+revoke all on table public.products from authenticated;
 revoke all on table public.audit_logs from authenticated;
 revoke all on table public.attachments from authenticated;
 
@@ -261,6 +352,8 @@ grant select, insert, update, delete on table public.linked_operations to authen
 grant select, insert, update, delete on table public.parties to authenticated;
 grant select, insert, update, delete on table public.fiscal_settings to authenticated;
 grant select, insert, update, delete on table public.assets to authenticated;
+grant select, insert, update, delete on table public.cash_movements to authenticated;
+grant select, insert, update, delete on table public.products to authenticated;
 grant select on table public.audit_logs to authenticated;
 grant select on table public.attachments to authenticated;
 
@@ -407,6 +500,56 @@ create policy "Allow authenticated update assets"
 drop policy if exists "Allow authenticated delete assets" on public.assets;
 create policy "Allow authenticated delete assets"
   on public.assets for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated read cash movements" on public.cash_movements;
+create policy "Allow authenticated read cash movements"
+  on public.cash_movements for select
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated insert cash movements" on public.cash_movements;
+create policy "Allow authenticated insert cash movements"
+  on public.cash_movements for insert
+  to authenticated
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update cash movements" on public.cash_movements;
+create policy "Allow authenticated update cash movements"
+  on public.cash_movements for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete cash movements" on public.cash_movements;
+create policy "Allow authenticated delete cash movements"
+  on public.cash_movements for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated read products" on public.products;
+create policy "Allow authenticated read products"
+  on public.products for select
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated insert products" on public.products;
+create policy "Allow authenticated insert products"
+  on public.products for insert
+  to authenticated
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update products" on public.products;
+create policy "Allow authenticated update products"
+  on public.products for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete products" on public.products;
+create policy "Allow authenticated delete products"
+  on public.products for delete
   to authenticated
   using ((select auth.uid()) is not null);
 

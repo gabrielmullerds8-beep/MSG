@@ -57,7 +57,7 @@ import {
 } from "./data";
 import { useFiscalStore } from "./store";
 import { isSupabaseConfigured, supabase } from "./supabase";
-import { AssetItem, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party, PaymentInstallment } from "./types";
+import { AssetItem, CashMovement, CashMovementType, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party, PaymentInstallment, ProductItem } from "./types";
 
 type View =
   | "dashboard"
@@ -69,6 +69,9 @@ type View =
   | "search"
   | "tax"
   | "financial"
+  | "bills"
+  | "cash"
+  | "products"
   | "assets"
   | "dre"
   | "reports"
@@ -86,6 +89,9 @@ const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "search", label: "Consulta Fiscal", icon: FileSearch },
   { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
   { id: "financial", label: "Financeira", icon: Database },
+  { id: "bills", label: "Faturas", icon: Files },
+  { id: "cash", label: "Caixa", icon: Database },
+  { id: "products", label: "Produtos", icon: PackagePlus },
   { id: "assets", label: "Patrimonial", icon: Building2 },
   { id: "dre", label: "DRE", icon: BarChart3 },
   { id: "reports", label: "Relatórios", icon: BarChart3 },
@@ -96,7 +102,9 @@ const views: Array<{ id: View; label: string; icon: any }> = [
 
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
 const unitOptions = ["UN", "KG", "TN", "MT", "PC", "SV"];
+const holderOptions = ["Itaú", "Sicredi", "Itaú Mailson"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
+type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
 type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">;
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
@@ -350,6 +358,13 @@ const invoiceProductEntries = (invoice: Invoice) => {
 };
 
 const invoiceDate = (invoice: Invoice) => (invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate);
+const isBillInvoice = (invoice: Invoice) => invoice.natureOperation === "Fatura" || invoice.natureOperation === "Recibo";
+const billFinancialKind = (invoice: Invoice): "receivable" | "payable" | null => {
+  if (!isBillInvoice(invoice)) return null;
+  if (/receber/i.test(invoice.operationType)) return "receivable";
+  if (/pagar/i.test(invoice.operationType)) return "payable";
+  return invoice.invoiceType === "issued" ? "receivable" : "payable";
+};
 const invoiceInstallments = (invoice: Invoice): PaymentInstallment[] =>
   invoice.financialInstallments?.length
     ? invoice.financialInstallments
@@ -358,6 +373,7 @@ const invoiceInstallments = (invoice: Invoice): PaymentInstallment[] =>
           id: "parcela_1",
           paymentCondition: invoice.paymentCondition,
           paymentMethod: invoice.paymentMethod,
+          holder: "Itaú",
           dueDate: invoice.dueDate || invoice.issueDate,
           amount: invoice.totalInvoice,
           pfValue: Number(invoice.pfValue || 0),
@@ -469,6 +485,8 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   const quantity = cleanNumber(form.get(`quantity${suffix}`));
   const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
+  const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
+  const freightValue = cleanNumber(form.get(`itemFreightValue${suffix}`));
   const icmsRate = cleanNumber(form.get(`icmsRate${suffix}`));
   const icmsBase = cleanNumber(form.get(`icmsBase${suffix}`)) || totalValue;
   const icmsValue = cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100;
@@ -479,14 +497,26 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   const cofinsBase = pisCofinsBase;
   const cofinsRate = cleanNumber(form.get(`cofinsRate${suffix}`));
   const cofinsValue = cleanNumber(form.get(`cofinsValue${suffix}`)) || (cofinsBase * cofinsRate) / 100;
+  const ipiRate = cleanNumber(form.get(`ipiRate${suffix}`));
+  const ipiBase = cleanNumber(form.get(`ipiBase${suffix}`)) || totalValue;
+  const ipiValue = cleanNumber(form.get(`ipiValue${suffix}`)) || (ipiBase * ipiRate) / 100;
+  const ibsRate = cleanNumber(form.get(`ibsRate${suffix}`));
+  const ibsBase = cleanNumber(form.get(`ibsBase${suffix}`)) || totalValue;
+  const ibsValue = cleanNumber(form.get(`ibsValue${suffix}`)) || (ibsBase * ibsRate) / 100;
+  const cbsRate = cleanNumber(form.get(`cbsRate${suffix}`));
+  const cbsBase = cleanNumber(form.get(`cbsBase${suffix}`)) || totalValue;
+  const cbsValue = cleanNumber(form.get(`cbsValue${suffix}`)) || (cbsBase * cbsRate) / 100;
   const cfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
 
   return {
     id: newId("item"),
+    productId: String(form.get(`productId${suffix}`) || ""),
     itemCode: "",
     description: String(form.get(`description${suffix}`) || ""),
     category: String(form.get(`category${suffix}`) || ""),
     costCenter: String(form.get(`costCenter${suffix}`) || ""),
+    accountingAccount: String(form.get(`accountingAccount${suffix}`) || ""),
+    productColor: String(form.get(`productColor${suffix}`) || ""),
     ncm: String(form.get(`ncm${suffix}`) || ""),
     cfop: mainCfop,
     cstIcms: String(form.get(`cstIcms${suffix}`) || "000"),
@@ -494,6 +524,8 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     quantity,
     unitValue,
     totalValue,
+    discountValue,
+    freightValue,
     icmsBase,
     icmsRate,
     icmsValue,
@@ -506,6 +538,15 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     cofinsRate,
     cofinsValue,
     cofinsCreditable: invoiceType === "received" && form.get(`cofinsCreditable${suffix}`) === "on",
+    ipiBase,
+    ipiRate,
+    ipiValue,
+    ibsBase,
+    ibsRate,
+    ibsValue,
+    cbsBase,
+    cbsRate,
+    cbsValue,
     cfemRate: invoiceType === "issued" ? fiscalConfig.cfemRate : 0,
     cfemValue: invoiceType === "issued" ? cfemBase * (fiscalConfig.cfemRate / 100) : 0,
     materialType: String(form.get(`materialType${suffix}`) || ""),
@@ -1321,6 +1362,7 @@ function InvoiceForm({
   invoices,
   operations,
   parties,
+  products,
   editingInvoice,
   canEdit = true,
   onSave,
@@ -1333,6 +1375,7 @@ function InvoiceForm({
   invoices: Invoice[];
   operations: LinkedOperation[];
   parties: Party[];
+  products: ProductItem[];
   editingInvoice?: Invoice | null;
   canEdit?: boolean;
   onSave: (invoice: Invoice) => void;
@@ -1343,29 +1386,46 @@ function InvoiceForm({
 }) {
   const isReceived = type === "received";
   const isEditing = Boolean(editingInvoice);
-  const [documentModel, setDocumentModel] = useState<"NF-e" | "NFS-e">(
-    editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e" ? "NFS-e" : "NF-e",
+  const [documentModel, setDocumentModel] = useState<ReceivedDocumentModel>(
+    editingInvoice?.natureOperation === "CT-e" || editingInvoice?.operationType === "Conhecimento de frete"
+      ? "CT-e"
+      : editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e"
+        ? "NFS-e"
+        : "NF-e",
   );
   const [selectedMainCfop, setSelectedMainCfop] = useState(editingInvoice?.mainCfop || "");
   const isServiceReceived = isReceived && documentModel === "NFS-e";
-  const [linked, setLinked] = useState(editingInvoice?.hasLinkedOperation ?? (isReceived && documentModel !== "NFS-e"));
+  const isFreightDocument = isReceived && documentModel === "CT-e";
+  const isNonProductDocument = isServiceReceived || isFreightDocument;
+  const partyKind: Party["kind"] = isFreightDocument ? "carrier" : isReceived ? "supplier" : "customer";
+  const [linked, setLinked] = useState(editingInvoice?.hasLinkedOperation ?? (isReceived && documentModel === "NF-e"));
   const [itemIndexes, setItemIndexes] = useState(
     editingInvoice?.items?.length ? editingInvoice.items.map((_, index) => index) : [0],
   );
   const [installmentIndexes, setInstallmentIndexes] = useState(
     editingInvoice?.financialInstallments?.length ? editingInvoice.financialInstallments.map((_, index) => index) : [0],
   );
+  const [selectedProducts, setSelectedProducts] = useState<Record<number, string>>(() =>
+    Object.fromEntries((editingInvoice?.items || []).map((item, index) => [index, item.productId || ""])),
+  );
   const [itemTotals, setItemTotals] = useState(() => ({
     products: editingInvoice?.totalProducts || 0,
+    discounts: editingInvoice?.items?.reduce((total, item) => total + Number(item.discountValue || 0), 0) || editingInvoice?.discountValue || 0,
+    freightItems: editingInvoice?.items?.reduce((total, item) => total + Number(item.freightValue || 0), 0) || 0,
     icms: editingInvoice?.icmsValue || editingInvoice?.icmsCreditValue || 0,
     pis: editingInvoice?.pisValue || editingInvoice?.pisCreditValue || 0,
     cofins: editingInvoice?.cofinsValue || editingInvoice?.cofinsCreditValue || 0,
+    ipi: editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0,
+    ibs: editingInvoice?.items?.reduce((total, item) => total + Number(item.ibsValue || 0), 0) || 0,
+    cbs: editingInvoice?.items?.reduce((total, item) => total + Number(item.cbsValue || 0), 0) || 0,
+    retention: editingInvoice?.retentionValue || 0,
+    net: editingInvoice?.totalInvoice || 0,
   }));
   const [financePfTotal, setFinancePfTotal] = useState(
     () => editingInvoice?.financialInstallments?.reduce((total, installment) => total + Number(installment.pfValue || 0), 0) || Number(editingInvoice?.pfValue || 0),
   );
   const [selectedParty, setSelectedParty] = useState<Party | undefined>(() =>
-    parties.find((party) => party.kind === (isReceived ? "supplier" : "customer") && (party.name === editingInvoice?.partyName || party.cnpj === editingInvoice?.partyCnpj)),
+    parties.find((party) => party.kind === partyKind && (party.name === editingInvoice?.partyName || party.cnpj === editingInvoice?.partyCnpj)),
   );
   const [selectedCarrier, setSelectedCarrier] = useState<Party | undefined>(() =>
     parties.find((party) => party.kind === "carrier" && party.name === editingInvoice?.carrierName),
@@ -1373,23 +1433,36 @@ function InvoiceForm({
   const [thirdPartyFreight, setThirdPartyFreight] = useState(
     Boolean(editingInvoice?.carrierName?.includes("terceiros")) || (!editingInvoice?.freightValue && Boolean(editingInvoice)),
   );
+  const [retentionEnabled, setRetentionEnabled] = useState(Boolean(editingInvoice?.retentionValue));
 
   useEffect(() => {
-    if (documentModel === "NFS-e" && !editingInvoice?.hasLinkedOperation) setLinked(false);
+    if ((documentModel === "NFS-e" || documentModel === "CT-e") && !editingInvoice?.hasLinkedOperation) setLinked(false);
+    if (documentModel === "CT-e" && !selectedMainCfop) setSelectedMainCfop("1353");
   }, [documentModel, editingInvoice?.hasLinkedOperation]);
+
+  useEffect(() => {
+    if (selectedParty && selectedParty.kind !== partyKind) setSelectedParty(undefined);
+  }, [partyKind, selectedParty]);
 
   const updateFormSummaries = (form: HTMLFormElement) => {
     const formData = new FormData(form);
     let products = 0;
+    let discounts = 0;
+    let freightItems = 0;
     let icms = 0;
     let pis = 0;
     let cofins = 0;
+    let ipi = 0;
+    let ibs = 0;
+    let cbs = 0;
 
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
       const quantity = cleanNumber(formData.get(`quantity${suffix}`));
       const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
+      const discountValueField = form.elements.namedItem(`discountValue${suffix}`) as HTMLInputElement | null;
+      const itemFreightValueField = form.elements.namedItem(`itemFreightValue${suffix}`) as HTMLInputElement | null;
       const icmsBaseField = form.elements.namedItem(`icmsBase${suffix}`) as HTMLInputElement | null;
       const icmsRateField = form.elements.namedItem(`icmsRate${suffix}`) as HTMLInputElement | null;
       const icmsValueField = form.elements.namedItem(`icmsValue${suffix}`) as HTMLInputElement | null;
@@ -1398,12 +1471,23 @@ function InvoiceForm({
       const pisValueField = form.elements.namedItem(`pisValue${suffix}`) as HTMLInputElement | null;
       const cofinsRateField = form.elements.namedItem(`cofinsRate${suffix}`) as HTMLInputElement | null;
       const cofinsValueField = form.elements.namedItem(`cofinsValue${suffix}`) as HTMLInputElement | null;
+      const ipiBaseField = form.elements.namedItem(`ipiBase${suffix}`) as HTMLInputElement | null;
+      const ipiRateField = form.elements.namedItem(`ipiRate${suffix}`) as HTMLInputElement | null;
+      const ipiValueField = form.elements.namedItem(`ipiValue${suffix}`) as HTMLInputElement | null;
+      const ibsBaseField = form.elements.namedItem(`ibsBase${suffix}`) as HTMLInputElement | null;
+      const ibsRateField = form.elements.namedItem(`ibsRate${suffix}`) as HTMLInputElement | null;
+      const ibsValueField = form.elements.namedItem(`ibsValue${suffix}`) as HTMLInputElement | null;
+      const cbsBaseField = form.elements.namedItem(`cbsBase${suffix}`) as HTMLInputElement | null;
+      const cbsRateField = form.elements.namedItem(`cbsRate${suffix}`) as HTMLInputElement | null;
+      const cbsValueField = form.elements.namedItem(`cbsValue${suffix}`) as HTMLInputElement | null;
 
       const unitValue = cleanNumber(unitValueField?.value || null);
       if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
 
       const totalValue = cleanNumber(totalValueField?.value || null);
       products += totalValue;
+      discounts += cleanNumber(discountValueField?.value || null);
+      freightItems += cleanNumber(itemFreightValueField?.value || null);
       const icmsBase = cleanNumber(icmsBaseField?.value || null) || totalValue;
       const icmsRate = cleanNumber(icmsRateField?.value || null);
       if (icmsBase && icmsRate && icmsValueField) icmsValueField.value = formatCurrency((icmsBase * icmsRate) / 100);
@@ -1413,17 +1497,48 @@ function InvoiceForm({
       const cofinsRate = cleanNumber(cofinsRateField?.value || null);
       if (pisBase && pisRate && pisValueField) pisValueField.value = formatCurrency((pisBase * pisRate) / 100);
       if (pisBase && cofinsRate && cofinsValueField) cofinsValueField.value = formatCurrency((pisBase * cofinsRate) / 100);
+      const ipiBase = cleanNumber(ipiBaseField?.value || null) || totalValue;
+      const ipiRate = cleanNumber(ipiRateField?.value || null);
+      if (ipiBase && ipiRate && ipiValueField) ipiValueField.value = formatCurrency((ipiBase * ipiRate) / 100);
+      const ibsBase = cleanNumber(ibsBaseField?.value || null) || totalValue;
+      const ibsRate = cleanNumber(ibsRateField?.value || null);
+      if (ibsBase && ibsRate && ibsValueField) ibsValueField.value = formatCurrency((ibsBase * ibsRate) / 100);
+      const cbsBase = cleanNumber(cbsBaseField?.value || null) || totalValue;
+      const cbsRate = cleanNumber(cbsRateField?.value || null);
+      if (cbsBase && cbsRate && cbsValueField) cbsValueField.value = formatCurrency((cbsBase * cbsRate) / 100);
       icms += cleanNumber(icmsValueField?.value || null);
       pis += cleanNumber(pisValueField?.value || null);
       cofins += cleanNumber(cofinsValueField?.value || null);
+      ipi += cleanNumber(ipiValueField?.value || null);
+      ibs += cleanNumber(ibsValueField?.value || null);
+      cbs += cleanNumber(cbsValueField?.value || null);
     });
-    setItemTotals({ products, icms, pis, cofins });
+    const freightValue = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
+    const discountValue = cleanNumber(formData.get("discountValue"));
+    const retentionValue = formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
+    const net = Math.max(products + freightValue + freightItems - discounts - discountValue - retentionValue, 0);
+    const amountFields = installmentIndexes
+      .map((index) => form.elements.namedItem(`installmentAmount_${index}`) as HTMLInputElement | null)
+      .filter(Boolean) as HTMLInputElement[];
+    const untouched = amountFields.filter((field) => field.dataset.userEdited !== "true");
+    if (amountFields.length && untouched.length === amountFields.length) {
+      const share = net / amountFields.length;
+      amountFields.forEach((field, index) => {
+        const value = index === amountFields.length - 1 ? net - share * (amountFields.length - 1) : share;
+        field.value = formatCurrency(value);
+      });
+    }
+    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, retention: retentionValue, net });
     setFinancePfTotal(
       installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
     );
   };
 
   const recalcItemValues = (event: FormEvent<HTMLFormElement>) => {
+    const target = event.target as HTMLInputElement;
+    if (target?.name?.startsWith("installmentAmount_")) {
+      target.dataset.userEdited = "true";
+    }
     updateFormSummaries(event.currentTarget);
   };
 
@@ -1437,12 +1552,22 @@ function InvoiceForm({
     if (currentDocumentModel === "NFS-e") mainCfop = "NFS-e";
     const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
+    const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
+    const itemFreightTotal = items.reduce((total, item) => total + Number(item.freightValue || 0), 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
-    const totalInvoice = totalProducts + freightValue;
+    const discountValue = cleanNumber(form.get("discountValue"));
+    const retentionType = isReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
+      ? isServiceReceived
+        ? "Retenções de impostos"
+        : "FUNRURAL"
+      : "";
+    const retentionValue = retentionType ? cleanNumber(form.get("retentionValue")) : 0;
+    const totalInvoice = Math.max(totalProducts + freightValue + itemFreightTotal - discountValue - itemDiscountTotal - retentionValue, 0);
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
       paymentCondition: String(form.get(`paymentCondition_${index}`) || ""),
       paymentMethod: String(form.get(`paymentMethod_${index}`) || ""),
+      holder: String(form.get(`holder_${index}`) || "Itaú"),
       dueDate: String(form.get(`dueDate_${index}`) || todayIso()),
       amount: cleanNumber(form.get(`installmentAmount_${index}`)),
       pfValue: cleanNumber(form.get(`installmentPfValue_${index}`)),
@@ -1455,6 +1580,7 @@ function InvoiceForm({
       amount: rawInstallments.length === 1 && installment.amount === 0 ? totalInvoice : installment.amount,
       paymentCondition: installment.paymentCondition || (index === 0 ? editingInvoice?.paymentCondition || "A prazo" : "A prazo"),
       paymentMethod: installment.paymentMethod || (index === 0 ? editingInvoice?.paymentMethod || "Boleto" : "Boleto"),
+      holder: installment.holder || "Itaú",
     }));
     const firstInstallment = financialInstallments[0];
     const totalPfValue = financialInstallments.reduce((total, installment) => total + Number(installment.pfValue || 0), 0);
@@ -1471,6 +1597,10 @@ function InvoiceForm({
     const cfemValue = isReceived ? 0 : cfemBase * (fiscalConfig.cfemRate / 100);
     const now = new Date().toISOString();
     const hasLinkedOperation = form.get("hasLinkedOperation") === "on";
+    const freightLinkNote = isFreightDocument && String(form.get("linkedInvoiceNumber") || "")
+      ? `Frete referente à NF-e ${String(form.get("linkedInvoiceNumber") || "")}`
+      : "";
+    const manualInternalNotes = String(form.get("internalNotes") || "");
 
     const invoice: Invoice = {
       id: editingInvoice?.id || newId("inv"),
@@ -1478,7 +1608,13 @@ function InvoiceForm({
       invoiceType: type,
       operationType: String(
         form.get("operationType") ||
-          (currentDocumentModel === "NFS-e" ? "Serviço tomado" : isReceived ? "Entrada" : "Saida"),
+          (currentDocumentModel === "NFS-e"
+            ? "Serviço tomado"
+            : currentDocumentModel === "CT-e"
+              ? "Conhecimento de frete"
+              : isReceived
+                ? "Entrada"
+                : "Saida"),
       ),
       invoiceNumber: String(form.get("invoiceNumber") || ""),
       series: "1",
@@ -1498,7 +1634,7 @@ function InvoiceForm({
       paymentMethod: firstInstallment?.paymentMethod || "",
       dueDate: firstInstallment?.dueDate || "",
       pfValue: totalPfValue,
-      carrierName: String(form.get("carrierName") || ""),
+      carrierName: isFreightDocument ? "" : String(form.get("carrierName") || ""),
       paymentDate: editingInvoice?.paymentDate || "",
       paid: Boolean(editingInvoice?.paid),
       status: String(form.get("status") || "Lancada") as Invoice["status"],
@@ -1506,6 +1642,9 @@ function InvoiceForm({
       costCenter: items[0]?.costCenter || "",
       totalProducts,
       freightValue,
+      discountValue,
+      retentionType,
+      retentionValue,
       totalInvoice,
       icmsBase,
       icmsValue,
@@ -1522,10 +1661,12 @@ function InvoiceForm({
       taxBenefit: "",
       legalBasis: "",
       additionalInfo: String(form.get("additionalInfo") || ""),
-      internalNotes: String(form.get("internalNotes") || ""),
+      internalNotes: [manualInternalNotes, freightLinkNote, String(form.get("linkedNotes") || "")]
+        .filter(Boolean)
+        .join("\n"),
       xmlFileName: "",
       pdfFileName: "",
-      hasLinkedOperation,
+      hasLinkedOperation: isFreightDocument ? false : hasLinkedOperation,
       linkedOperationType: String(form.get("linkedOperationType") || ""),
       linkedInvoiceNumber: String(form.get("linkedInvoiceNumber") || ""),
       finalRecipientName: String(form.get("finalRecipientName") || ""),
@@ -1538,7 +1679,7 @@ function InvoiceForm({
 
     onSave(invoice);
 
-    if (hasLinkedOperation) {
+    if (hasLinkedOperation && !isFreightDocument) {
       const linkedInvoiceNumber = String(form.get("linkedInvoiceNumber") || "");
       const existingOperation = operations.find(
         (operation) =>
@@ -1606,16 +1747,17 @@ function InvoiceForm({
           {isReceived && (
             <label className="field">
               <span>Tipo de documento</span>
-              <select name="documentModel" value={documentModel} onChange={(event) => setDocumentModel(event.target.value as "NF-e" | "NFS-e")}>
+              <select name="documentModel" value={documentModel} onChange={(event) => setDocumentModel(event.target.value as ReceivedDocumentModel)}>
                 <option value="NF-e">NF-e / mercadoria</option>
                 <option value="NFS-e">NFS-e / serviço tomado</option>
+                <option value="CT-e">Conhecimento de frete</option>
               </select>
             </label>
           )}
           <PartySelect
-            label={isReceived ? "Fornecedor" : "Cliente"}
+            label={isFreightDocument ? "Transportadora" : isReceived ? "Fornecedor" : "Cliente"}
             name="partyId"
-            kind={isReceived ? "supplier" : "customer"}
+            kind={partyKind}
             parties={parties}
             value={selectedParty?.id || ""}
             onChange={setSelectedParty}
@@ -1642,7 +1784,7 @@ function InvoiceForm({
               ))}
             </select>
           </label>
-          <Field label="Tipo de operação" name="operationType" defaultValue={editingInvoice?.operationType || (isServiceReceived ? "Serviço tomado" : isReceived ? "Compra para uso e consumo" : "Venda de produção")} />
+          <Field label="Tipo de operação" name="operationType" defaultValue={editingInvoice?.operationType || (isServiceReceived ? "Serviço tomado" : isFreightDocument ? "Conhecimento de frete" : isReceived ? "Compra para uso e consumo" : "Venda de produção")} />
           <label className="field">
             <span>Status</span>
             <select name="status" defaultValue={editingInvoice?.status || "Lancada"}>
@@ -1668,8 +1810,12 @@ function InvoiceForm({
           )}
         </div>
         <div className="items-stack">
-          {itemIndexes.map((itemIndex, position) => (
-            <article className="item-card" key={itemIndex}>
+          {itemIndexes.map((itemIndex, position) => {
+            const existingItem = editingInvoice?.items[position];
+            const selectedProductId = selectedProducts[itemIndex] || existingItem?.productId || "";
+            const selectedProduct = products.find((product) => product.id === selectedProductId);
+            return (
+            <article className="item-card" key={`${itemIndex}-${selectedProductId || "manual"}`}>
               <div className="panel-title between">
                 <h3>Item {position + 1}</h3>
                 {canEdit && itemIndexes.length > 1 && (
@@ -1684,29 +1830,64 @@ function InvoiceForm({
                 )}
               </div>
               <div className="form-grid">
-                <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.description || ""} required sanitize="letters" />
-                {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={editingInvoice?.items[position]?.category || ""} />}
-                {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={editingInvoice?.items[position]?.costCenter || ""} />}
-                <Field label={isServiceReceived ? "NCM (opcional para NFS-e)" : "NCM"} name={`ncm_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.ncm)} required={!isServiceReceived} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
-                <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={editingInvoice?.items[position]?.cstIcms || ""} />
-                <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={editingInvoice?.items[position]?.unit || (isServiceReceived ? "SV" : "UN")} />
-                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
-                <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.unitValue || 0)} autoCalc />
-                <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.totalValue || 0)} autoCalc />
-                <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsBase || 0)} autoCalc />
-                <PercentField label="Alíquota ICMS %" name={`icmsRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)} />
-                <MoneyField label="Valor ICMS" name={`icmsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.icmsValue || 0)} autoCalc />
-                <MoneyField label="Base PIS/COFINS" name={`pisCofinsBase_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisBase || 0)} autoCalc />
-                <PercentField label="Alíquota PIS %" name={`pisRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.pisRate || fiscalConfig.pisRate} />
-                <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.pisValue || 0)} autoCalc />
-                <PercentField label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.cofinsRate || fiscalConfig.cofinsRate} />
-                <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(editingInvoice?.items[position]?.cofinsValue || 0)} autoCalc />
-                {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.materialType || ""} sanitize="letters" />}
-                {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={onlyDigits(editingInvoice?.items[position]?.blockNumber)} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
-                {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockColor || ""} sanitize="letters" />}
-                {!isReceived && <Field label="Qualidade do bloco" name={`blockQuality_${itemIndex}`} options={blockQualityOptions} defaultValue={editingInvoice?.items[position]?.blockQuality || ""} />}
-                {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.blockMeasures || ""} />}
-                {!isReceived && <KgField label="KG" name={`kilograms_${itemIndex}`} defaultValue={editingInvoice?.items[position]?.kilograms || "0"} />}
+                {isReceived && !isNonProductDocument ? (
+                  <>
+                    <label className="field">
+                      <span>Produto comprado</span>
+                      <select
+                        name={`productId_${itemIndex}`}
+                        value={selectedProductId}
+                        onChange={(event) => setSelectedProducts((current) => ({ ...current, [itemIndex]: event.target.value }))}
+                        required
+                      >
+                        <option value="">Selecione</option>
+                        {products.filter((product) => product.active).map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <ReadOnlyField label="Descrição do produto/serviço" name={`description_${itemIndex}`} value={selectedProduct?.name || existingItem?.description || ""} />
+                  </>
+                ) : (
+                  <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="letters" />
+                )}
+                {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
+                {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || selectedProduct?.defaultCostCenter || ""} />}
+                {isReceived && <Field label="Conta contábil" name={`accountingAccount_${itemIndex}`} defaultValue={existingItem?.accountingAccount || selectedProduct?.accountingAccount || ""} />}
+                {isReceived && <Field label="Cor" name={`productColor_${itemIndex}`} defaultValue={existingItem?.productColor || selectedProduct?.color || ""} sanitize="letters" />}
+                <Field label={isNonProductDocument ? "NCM (opcional)" : "NCM"} name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required={!isNonProductDocument} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={existingItem?.cstIcms || ""} />
+                <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={existingItem?.unit || selectedProduct?.defaultUnit || (isNonProductDocument ? "SV" : "UN")} />
+                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(existingItem?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
+                <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
+                <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
+                <MoneyField label="Frete do item" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
+                <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.icmsBase || 0)} autoCalc />
+                <PercentField label="Alíquota ICMS %" name={`icmsRate_${itemIndex}`} defaultValue={existingItem?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)} />
+                <MoneyField label="Valor ICMS" name={`icmsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.icmsValue || 0)} autoCalc />
+                <MoneyField label="Base PIS/COFINS" name={`pisCofinsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.pisBase || 0)} autoCalc />
+                <PercentField label="Alíquota PIS %" name={`pisRate_${itemIndex}`} defaultValue={existingItem?.pisRate || fiscalConfig.pisRate} />
+                <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.pisValue || 0)} autoCalc />
+                <PercentField label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} defaultValue={existingItem?.cofinsRate || fiscalConfig.cofinsRate} />
+                <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cofinsValue || 0)} autoCalc />
+                <MoneyField label="Base IPI" name={`ipiBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ipiBase || 0)} autoCalc />
+                <PercentField label="Alíquota IPI %" name={`ipiRate_${itemIndex}`} defaultValue={existingItem?.ipiRate || 0} />
+                <MoneyField label="Valor IPI" name={`ipiValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ipiValue || 0)} autoCalc />
+                <MoneyField label="Base IBS" name={`ibsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ibsBase || 0)} autoCalc />
+                <PercentField label="Alíquota IBS %" name={`ibsRate_${itemIndex}`} defaultValue={existingItem?.ibsRate || 0} />
+                <MoneyField label="Valor IBS" name={`ibsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ibsValue || 0)} autoCalc />
+                <MoneyField label="Base CBS" name={`cbsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cbsBase || 0)} autoCalc />
+                <PercentField label="Alíquota CBS %" name={`cbsRate_${itemIndex}`} defaultValue={existingItem?.cbsRate || 0} />
+                <MoneyField label="Valor CBS" name={`cbsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cbsValue || 0)} autoCalc />
+                {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={existingItem?.materialType || ""} sanitize="letters" />}
+                {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={onlyDigits(existingItem?.blockNumber)} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
+                {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={existingItem?.blockColor || ""} sanitize="letters" />}
+                {!isReceived && <Field label="Qualidade do bloco" name={`blockQuality_${itemIndex}`} options={blockQualityOptions} defaultValue={existingItem?.blockQuality || ""} />}
+                {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={existingItem?.blockMeasures || ""} />}
+                {!isReceived && <KgField label="KG" name={`kilograms_${itemIndex}`} defaultValue={existingItem?.kilograms || "0"} />}
               </div>
               {isReceived && (
                 <div className="check-row">
@@ -1725,38 +1906,93 @@ function InvoiceForm({
                 </div>
               )}
             </article>
-          ))}
+          );
+          })}
+        </div>
+        <div className="note-adjustments">
+          <MoneyField
+            label="Desconto total da nota"
+            name="discountValue"
+            defaultValue={formatCurrency(editingInvoice?.discountValue || 0)}
+            autoCalc
+          />
         </div>
         <div className="item-totals-grid">
           <StatCard title="Total produtos" value={formatCurrency(itemTotals.products)} tone="info" />
+          <StatCard title="Descontos" value={formatCurrency(itemTotals.discounts)} tone="danger" />
+          <StatCard title="Frete por item" value={formatCurrency(itemTotals.freightItems)} tone="warn" />
           <StatCard title="Total ICMS" value={formatCurrency(itemTotals.icms)} tone="danger" />
           <StatCard title="Total PIS" value={formatCurrency(itemTotals.pis)} tone="warn" />
           <StatCard title="Total COFINS" value={formatCurrency(itemTotals.cofins)} tone="warn" />
+          <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />
+          <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
+          <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
+          <StatCard title="Retenções/FUNRURAL" value={formatCurrency(itemTotals.retention)} tone="danger" />
+          <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
         </div>
+        {isReceived && !isFreightDocument && (
+          <div className="retention-box">
+            <label className="check">
+              <input
+                name="retentionEnabled"
+                type="checkbox"
+                checked={retentionEnabled}
+                onChange={(event) => setRetentionEnabled(event.target.checked)}
+              />
+              {isServiceReceived ? "Retenção de impostos" : "Retenção de FUNRURAL"}
+            </label>
+            {retentionEnabled && (
+              <MoneyField
+                label={isServiceReceived ? "Valor das retenções" : "Valor FUNRURAL"}
+                name="retentionValue"
+                defaultValue={formatCurrency(editingInvoice?.retentionValue || 0)}
+                autoCalc
+              />
+            )}
+          </div>
+        )}
+        {isFreightDocument && (
+          <div className="linked-note-box">
+            <h3>Vincular NF-e ao frete</h3>
+            <div className="form-grid compact">
+              <Field label="Nota eletrônica relacionada" name="linkedInvoiceNumber" defaultValue={editingInvoice?.linkedInvoiceNumber || ""} />
+              <label className="field wide">
+                <span>Observação do vínculo</span>
+                <input
+                  name="linkedNotes"
+                  defaultValue={editingInvoice?.internalNotes?.includes("Frete referente") ? editingInvoice.internalNotes : ""}
+                  placeholder="Ex.: Frete referente à NF-e 5574"
+                />
+              </label>
+            </div>
+          </div>
+        )}
       </section>
 
-      <section className="split-grid">
-        <section className="panel">
-          <h2>Transporte</h2>
-          <label className="check transport-third-party">
-            <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
-            Frete por conta de terceiros
-          </label>
-          <div className="form-grid compact">
-            <MoneyField label="Valor frete" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
-            <PartySelect
-              label="Transportadora"
-              name="carrierId"
-              kind="carrier"
-              parties={parties}
-              value={selectedCarrier?.id || ""}
-              onChange={setSelectedCarrier}
-              onAdd={onAddParty}
-            />
-            <input name="carrierName" type="hidden" value={selectedCarrier?.name || editingInvoice?.carrierName || ""} readOnly />
-            {!thirdPartyFreight && <Field label="Vencimento" name="freightDueDate" type="date" />}
-          </div>
-        </section>
+      <section className={isFreightDocument ? "view-stack" : "split-grid"}>
+        {!isFreightDocument && (
+          <section className="panel">
+            <h2>Transporte</h2>
+            <label className="check transport-third-party">
+              <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
+              Frete por conta de terceiros
+            </label>
+            <div className="form-grid compact">
+              <MoneyField label="Valor frete" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
+              <PartySelect
+                label="Transportadora"
+                name="carrierId"
+                kind="carrier"
+                parties={parties}
+                value={selectedCarrier?.id || ""}
+                onChange={setSelectedCarrier}
+                onAdd={onAddParty}
+              />
+              <input name="carrierName" type="hidden" value={selectedCarrier?.name || editingInvoice?.carrierName || ""} readOnly />
+              {!thirdPartyFreight && <Field label="Vencimento" name="freightDueDate" type="date" />}
+            </div>
+          </section>
+        )}
 
         <section className="panel">
           <div className="panel-title between">
@@ -1765,7 +2001,22 @@ function InvoiceForm({
               className="icon-btn"
               type="button"
               title="Adicionar parcela"
-              onClick={() => setInstallmentIndexes((current) => [...current, Math.max(...current) + 1])}
+              onClick={(event) => {
+                const form = event.currentTarget.closest("form") as HTMLFormElement | null;
+                setInstallmentIndexes((current) => [...current, Math.max(...current) + 1]);
+                window.setTimeout(() => {
+                  if (!form) return;
+                  const fields = Array.from(form.querySelectorAll<HTMLInputElement>('input[name^="installmentAmount_"]'));
+                  if (!fields.length) return;
+                  const total = itemTotals.net || itemTotals.products;
+                  const share = total / fields.length;
+                  fields.forEach((field, index) => {
+                    const value = index === fields.length - 1 ? total - share * (fields.length - 1) : share;
+                    field.value = formatCurrency(value);
+                    delete field.dataset.userEdited;
+                  });
+                }, 0);
+              }}
             >
               <Plus size={16} />
             </button>
@@ -1778,6 +2029,7 @@ function InvoiceForm({
                   <strong>Parcela {position + 1}</strong>
                   <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} defaultValue={installment?.paymentCondition || editingInvoice?.paymentCondition || "A prazo"} />
                   <Field label="Meio de pagamento" name={`paymentMethod_${installmentIndex}`} defaultValue={installment?.paymentMethod || editingInvoice?.paymentMethod || "Boleto"} />
+                  <Field label="Portador" name={`holder_${installmentIndex}`} options={holderOptions} defaultValue={installment?.holder || "Itaú"} />
                   <Field label="Vencimento" name={`dueDate_${installmentIndex}`} type="date" defaultValue={installment?.dueDate || editingInvoice?.dueDate || ""} />
                   <MoneyField label="Valor da parcela" name={`installmentAmount_${installmentIndex}`} defaultValue={formatCurrency(installment?.amount || (position === 0 ? editingInvoice?.totalInvoice || 0 : 0))} autoCalc />
                   <MoneyField label="Valor PF" name={`installmentPfValue_${installmentIndex}`} defaultValue={formatCurrency(installment?.pfValue || (position === 0 && !editingInvoice?.financialInstallments?.length ? editingInvoice?.pfValue || 0 : 0))} autoCalc />
@@ -2122,6 +2374,7 @@ function FinancialView({
   const [endDate, setEndDate] = useState(today);
   const [listType, setListType] = useState<"all" | "receivable" | "payable">("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "paid">("open");
+  const [holderFilter, setHolderFilter] = useState("all");
   const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
@@ -2144,11 +2397,11 @@ function FinancialView({
     kind: "receivable" | "payable";
   };
   const allEntries = invoices.flatMap((invoice) => {
-    const kind: FinancialEntry["kind"] | null = invoiceConsidersSale(invoice)
+    const kind: FinancialEntry["kind"] | null = billFinancialKind(invoice) || (invoiceConsidersSale(invoice)
       ? "receivable"
       : invoiceConsidersCost(invoice)
         ? "payable"
-        : null;
+        : null);
     if (!kind) return [];
     return invoiceInstallments(invoice).map((installment) => ({
       id: `${invoice.id}_${installment.id}`,
@@ -2164,10 +2417,12 @@ function FinancialView({
     if (statusFilter === "open") return !entry.installment.paid;
     return true;
   };
-  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry));
-  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry));
-  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entry.installment.paid && byEntryPeriod(entry));
-  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entry.installment.paid && byEntryPeriod(entry));
+  const byEntryHolder = (entry: FinancialEntry) =>
+    holderFilter === "all" || (entry.installment.holder || "Itaú") === holderFilter;
+  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry));
+  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry));
+  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entry.installment.paid && byEntryPeriod(entry) && byEntryHolder(entry));
+  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entry.installment.paid && byEntryPeriod(entry) && byEntryHolder(entry));
   const inRange = (entry: FinancialEntry, days: number) => {
     const dueDate = entry.installment.dueDate;
     return dueDate >= today && dueDate <= addDays(days);
@@ -2246,6 +2501,7 @@ function FinancialView({
         <tr>
           <th>{partyLabel}</th>
           <th>Vencimento</th>
+          <th>Portador</th>
           <th>Valor</th>
           <th>{paymentDateLabel}</th>
           <th>Pago</th>
@@ -2257,6 +2513,7 @@ function FinancialView({
           <tr key={entry.id}>
             <td>{entry.invoice.partyName}</td>
             <td>{formatDate(entry.installment.dueDate)}</td>
+            <td>{entry.installment.holder || "Itaú"}</td>
             <td>{formatCurrency(installmentTotal(entry.installment))}</td>
             <td>
               <input
@@ -2282,7 +2539,7 @@ function FinancialView({
         ))}
         {!items.length && (
           <tr>
-            <td colSpan={6}>Nenhum lançamento no período.</td>
+            <td colSpan={7}>Nenhum lançamento no período.</td>
           </tr>
         )}
       </tbody>
@@ -2315,6 +2572,15 @@ function FinancialView({
               <option value="all">Todos</option>
               <option value="open">Em aberto</option>
               <option value="paid">Pagos</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Portador</span>
+            <select value={holderFilter} onChange={(event) => setHolderFilter(event.target.value)}>
+              <option value="all">Todos</option>
+              {holderOptions.map((holder) => (
+                <option key={holder} value={holder}>{holder}</option>
+              ))}
             </select>
           </label>
         </div>
@@ -2355,6 +2621,644 @@ function FinancialView({
       <section className="split-grid">
         <FinancePie title="Fluxo a receber" data={receiveFlowChart} />
         <FinancePie title="Fluxo a pagar" data={payFlowChart} />
+      </section>
+    </div>
+  );
+}
+
+function BillFormView({
+  invoices,
+  parties,
+  onSave,
+  onDelete,
+  onAddParty,
+}: {
+  invoices: Invoice[];
+  parties: Party[];
+  onSave: (invoice: Invoice) => void;
+  onDelete: (id: string) => void;
+  onAddParty: (kind: Party["kind"]) => void;
+}) {
+  const [entryType, setEntryType] = useState<"payable" | "receivable">("payable");
+  const [series, setSeries] = useState<"Fatura" | "Recibo">("Fatura");
+  const [selectedParty, setSelectedParty] = useState<Party | undefined>();
+  const [editingBill, setEditingBill] = useState<Invoice | null>(null);
+  const [installmentIndexes, setInstallmentIndexes] = useState([0]);
+  const [totalValue, setTotalValue] = useState("R$ 0,00");
+  const [installmentsTotal, setInstallmentsTotal] = useState(0);
+  const partyKind: Party["kind"] = entryType === "payable" ? "supplier" : "customer";
+  const billInvoices = invoices
+    .filter(isBillInvoice)
+    .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)));
+
+  useEffect(() => {
+    if (selectedParty && selectedParty.kind !== partyKind) setSelectedParty(undefined);
+  }, [partyKind, selectedParty]);
+
+  const startNew = () => {
+    setEditingBill(null);
+    setEntryType("payable");
+    setSeries("Fatura");
+    setSelectedParty(undefined);
+    setInstallmentIndexes([0]);
+    setTotalValue("R$ 0,00");
+    setInstallmentsTotal(0);
+  };
+
+  const editBill = (invoice: Invoice) => {
+    if (!window.confirm("Tem certeza que deseja alterar esta fatura?")) return;
+    const kind = billFinancialKind(invoice) || "payable";
+    setEditingBill(invoice);
+    setEntryType(kind);
+    setSeries(invoice.natureOperation === "Recibo" ? "Recibo" : "Fatura");
+    setSelectedParty(parties.find((party) => party.kind === (kind === "payable" ? "supplier" : "customer") && (party.name === invoice.partyName || party.cnpj === invoice.partyCnpj)));
+    setInstallmentIndexes(invoiceInstallments(invoice).map((_, index) => index));
+    setTotalValue(formatCurrency(invoice.totalInvoice || 0));
+    setInstallmentsTotal(invoiceInstallments(invoice).reduce((total, installment) => total + installmentTotal(installment), 0));
+  };
+
+  const updateInstallmentSummary = (form: HTMLFormElement) => {
+    const data = new FormData(form);
+    setInstallmentsTotal(
+      installmentIndexes.reduce((total, index) => total + cleanNumber(data.get(`installmentAmount_${index}`)) + cleanNumber(data.get(`installmentPfValue_${index}`)), 0),
+    );
+  };
+
+  const submitBill = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (editingBill && !window.confirm("Tem certeza que deseja salvar a alteração desta fatura?")) return;
+    if (!selectedParty) {
+      window.alert(entryType === "payable" ? "Selecione um fornecedor cadastrado." : "Selecione um cliente cadastrado.");
+      return;
+    }
+    const form = new FormData(event.currentTarget);
+    const amount = cleanNumber(form.get("totalInvoice"));
+    const costCenter = String(form.get("costCenter") || "");
+    const comment = String(form.get("comment") || "");
+    const currentSeries = String(form.get("series") || series);
+    const currentEntryType = String(form.get("entryType") || entryType) as "payable" | "receivable";
+    const now = new Date().toISOString();
+    const rawInstallments = installmentIndexes.map((index, position) => ({
+      id: editingBill?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
+      paymentCondition: String(form.get(`paymentCondition_${index}`) || "A prazo"),
+      paymentMethod: String(form.get(`paymentMethod_${index}`) || "Boleto"),
+      holder: String(form.get(`holder_${index}`) || "Itaú"),
+      dueDate: String(form.get(`dueDate_${index}`) || todayIso()),
+      amount: cleanNumber(form.get(`installmentAmount_${index}`)),
+      pfValue: cleanNumber(form.get(`installmentPfValue_${index}`)),
+      paid: Boolean(editingBill?.financialInstallments?.[position]?.paid),
+      paymentDate: editingBill?.financialInstallments?.[position]?.paymentDate || "",
+      notes: editingBill?.financialInstallments?.[position]?.notes || "",
+    }));
+    const financialInstallments = rawInstallments.map((installment, index) => ({
+      ...installment,
+      amount: rawInstallments.length === 1 && installment.amount === 0 ? amount : installment.amount,
+    }));
+    const firstInstallment = financialInstallments[0];
+    const invoiceType: InvoiceType = currentEntryType === "receivable" ? "issued" : "received";
+
+    const invoice: Invoice = {
+      id: editingBill?.id || newId("bill"),
+      companyId: "msg",
+      invoiceType,
+      operationType: `${currentSeries} a ${currentEntryType === "receivable" ? "receber" : "pagar"}`,
+      invoiceNumber: String(form.get("title") || ""),
+      series: currentSeries,
+      accessKey: "",
+      issueDate: String(form.get("issueDate") || todayIso()),
+      entryDate: invoiceType === "received" ? String(form.get("issueDate") || todayIso()) : undefined,
+      exitDate: invoiceType === "issued" ? String(form.get("issueDate") || todayIso()) : undefined,
+      partyName: selectedParty?.name || String(form.get("partyName") || ""),
+      partyCnpj: selectedParty?.cnpj || String(form.get("partyCnpj") || ""),
+      partyIe: selectedParty?.ie || "",
+      city: selectedParty?.city || "",
+      state: selectedParty?.state || "RS",
+      natureOperation: currentSeries,
+      mainCfop: "FATURA",
+      purpose: "Normal",
+      paymentCondition: firstInstallment?.paymentCondition || "",
+      paymentMethod: firstInstallment?.paymentMethod || "",
+      dueDate: firstInstallment?.dueDate || "",
+      pfValue: financialInstallments.reduce((total, installment) => total + Number(installment.pfValue || 0), 0),
+      carrierName: "",
+      paymentDate: editingBill?.paymentDate || "",
+      paid: Boolean(editingBill?.paid),
+      status: "Lancada",
+      category: "Fatura",
+      costCenter,
+      totalProducts: amount,
+      freightValue: 0,
+      totalInvoice: amount,
+      icmsBase: 0,
+      icmsValue: 0,
+      icmsCreditValue: 0,
+      pisBase: 0,
+      pisValue: 0,
+      pisCreditValue: 0,
+      cofinsBase: 0,
+      cofinsValue: 0,
+      cofinsCreditValue: 0,
+      cfemBase: 0,
+      cfemRate: 0,
+      cfemValue: 0,
+      additionalInfo: comment,
+      internalNotes: "",
+      xmlFileName: "",
+      pdfFileName: "",
+      hasLinkedOperation: false,
+      createdAt: editingBill?.createdAt || now,
+      updatedAt: now,
+      items: [
+        {
+          id: editingBill?.items?.[0]?.id || newId("item"),
+          itemCode: "",
+          description: comment || currentSeries,
+          category: "Fatura",
+          costCenter,
+          ncm: "",
+          cfop: "FATURA",
+          cstIcms: "",
+          unit: "SV",
+          quantity: 1,
+          unitValue: amount,
+          totalValue: amount,
+          icmsBase: 0,
+          icmsRate: 0,
+          icmsValue: 0,
+          icmsCreditable: false,
+          pisBase: 0,
+          pisRate: 0,
+          pisValue: 0,
+          pisCreditable: false,
+          cofinsBase: 0,
+          cofinsRate: 0,
+          cofinsValue: 0,
+          cofinsCreditable: false,
+          cfemRate: 0,
+          cfemValue: 0,
+          notes: comment,
+        },
+      ],
+      financialInstallments,
+    };
+
+    onSave(invoice);
+    startNew();
+  };
+
+  return (
+    <div className="view-stack">
+      <section className="panel">
+        <div className="panel-title between">
+          <h2>{editingBill ? "Alterar fatura" : "Lançamento de faturas"}</h2>
+          {editingBill && (
+            <ActionButton icon={X} variant="ghost" onClick={startNew}>Cancelar</ActionButton>
+          )}
+        </div>
+        <form className="view-stack" onSubmit={submitBill} onInput={(event) => updateInstallmentSummary(event.currentTarget)}>
+          <div className="form-grid">
+            <label className="field">
+              <span>Tipo de lcto</span>
+              <select name="entryType" value={entryType} onChange={(event) => setEntryType(event.target.value as typeof entryType)}>
+                <option value="payable">A pagar</option>
+                <option value="receivable">A receber</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Série</span>
+              <select name="series" value={series} onChange={(event) => setSeries(event.target.value as typeof series)}>
+                <option value="Fatura">Fatura</option>
+                <option value="Recibo">Recibo</option>
+              </select>
+            </label>
+            <Field label="Título" name="title" defaultValue={editingBill?.invoiceNumber || ""} required />
+            <Field label="Data de emissão" name="issueDate" type="date" defaultValue={editingBill?.issueDate || todayIso()} required />
+            <PartySelect
+              label={entryType === "payable" ? "Fornecedor" : "Cliente"}
+              name="partyId"
+              kind={partyKind}
+              parties={parties}
+              value={selectedParty?.id || ""}
+              onChange={setSelectedParty}
+              onAdd={onAddParty}
+            />
+            <ReadOnlyField label="CNPJ/CPF" name="partyCnpj" value={selectedParty?.cnpj || editingBill?.partyCnpj} />
+            <input name="partyName" type="hidden" value={selectedParty?.name || editingBill?.partyName || ""} readOnly />
+            <label className="field">
+              <span>Centro de custo</span>
+              <select name="costCenter" defaultValue={editingBill?.costCenter || ""} required>
+                <option value="">Selecione</option>
+                {fiscalConfig.costCenters.map((center) => (
+                  <option key={center} value={center}>{center}</option>
+                ))}
+              </select>
+            </label>
+            <MoneyField label="Valor total" name="totalInvoice" defaultValue={editingBill ? formatCurrency(editingBill.totalInvoice) : totalValue} required onChangeValue={setTotalValue} />
+            <label className="field wide">
+              <span>Comentário</span>
+              <textarea name="comment" defaultValue={editingBill?.additionalInfo || ""} placeholder="Descreva o serviço ou produto adquirido" />
+            </label>
+          </div>
+
+          <section className="panel subtle-panel">
+            <div className="panel-title between">
+              <h2>Dados financeiros</h2>
+              <button
+                className="icon-btn"
+                type="button"
+                title="Adicionar parcela"
+                onClick={() => setInstallmentIndexes((current) => [...current, Math.max(...current) + 1])}
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            <div className="installments-stack">
+              {installmentIndexes.map((installmentIndex, position) => {
+                const installment = editingBill?.financialInstallments?.[position];
+                return (
+                  <article className="installment-row" key={installmentIndex}>
+                    <strong>Parcela {position + 1}</strong>
+                    <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} defaultValue={installment?.paymentCondition || "A prazo"} />
+                    <Field label="Prazo de pgto" name={`paymentMethod_${installmentIndex}`} defaultValue={installment?.paymentMethod || "Boleto"} />
+                    <Field label="Portador" name={`holder_${installmentIndex}`} options={holderOptions} defaultValue={installment?.holder || "Itaú"} />
+                    <Field label="Vencimento" name={`dueDate_${installmentIndex}`} type="date" defaultValue={installment?.dueDate || todayIso()} />
+                    <MoneyField label="Valor da parcela" name={`installmentAmount_${installmentIndex}`} defaultValue={formatCurrency(installment?.amount || (position === 0 ? cleanNumber(totalValue) : 0))} autoCalc />
+                    <MoneyField label="Valor PF" name={`installmentPfValue_${installmentIndex}`} defaultValue={formatCurrency(installment?.pfValue || 0)} autoCalc />
+                    {installmentIndexes.length > 1 && (
+                      <button className="icon-btn danger" type="button" title="Remover parcela" onClick={() => setInstallmentIndexes((current) => current.filter((value) => value !== installmentIndex))}>
+                        <X size={16} />
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+            <div className="finance-pf-total">
+              <span>Total parcelado</span>
+              <strong>{formatCurrency(installmentsTotal)}</strong>
+            </div>
+          </section>
+
+          <div className="form-actions">
+            <ActionButton icon={Save} type="submit">{editingBill ? "Salvar alteração" : "Salvar fatura"}</ActionButton>
+            {editingBill && (
+              <ActionButton
+                icon={X}
+                variant="danger"
+                onClick={() => {
+                  if (!window.confirm("Tem certeza que deseja excluir esta fatura?")) return;
+                  onDelete(editingBill.id);
+                  startNew();
+                }}
+              >
+                Excluir fatura
+              </ActionButton>
+            )}
+          </div>
+        </form>
+      </section>
+
+      <section className="panel">
+        <h2>Faturas lançadas</h2>
+        <table className="static-table">
+          <thead>
+            <tr>
+              <th>Tipo</th>
+              <th>Série</th>
+              <th>Título</th>
+              <th>Cliente/Fornecedor</th>
+              <th>Vencimento</th>
+              <th>Valor</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {billInvoices.map((invoice) => (
+              <tr key={invoice.id}>
+                <td>{billFinancialKind(invoice) === "receivable" ? "A receber" : "A pagar"}</td>
+                <td>{invoice.natureOperation}</td>
+                <td>{invoice.invoiceNumber}</td>
+                <td>{invoice.partyName}</td>
+                <td>{formatDate(invoice.dueDate)}</td>
+                <td>{formatCurrency(invoiceFinancialAmount(invoice))}</td>
+                <td><Badge value={invoice.paid ? "Paga" : "Em aberto"} /></td>
+                <td>
+                  <button className="icon-btn" type="button" title="Editar" onClick={() => editBill(invoice)}>
+                    <Pencil size={15} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!billInvoices.length && (
+              <tr>
+                <td colSpan={8}>Nenhuma fatura lançada.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  );
+}
+
+type CashExtractEntry = {
+  id: string;
+  source: "invoice" | "manual";
+  manualId?: string;
+  date: string;
+  action: "Entrada" | "Saída" | "Transferência";
+  holder: string;
+  costCenter: string;
+  history: string;
+  amount: number;
+  movement?: CashMovement;
+};
+
+function CashView({
+  invoices,
+  cashMovements,
+  onSaveMovement,
+  onDeleteMovement,
+}: {
+  invoices: Invoice[];
+  cashMovements: CashMovement[];
+  onSaveMovement: (movement: CashMovement) => void;
+  onDeleteMovement: (id: string) => void;
+}) {
+  const today = todayIso();
+  const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useState(today);
+  const [holderFilter, setHolderFilter] = useState("all");
+  const [costCenterFilter, setCostCenterFilter] = useState("all");
+  const [showForm, setShowForm] = useState(false);
+  const [editingMovement, setEditingMovement] = useState<CashMovement | null>(null);
+  const [movementType, setMovementType] = useState<CashMovementType>("entry");
+
+  const invoiceEntries: CashExtractEntry[] = invoices.flatMap((invoice) => {
+    const financialKind = billFinancialKind(invoice);
+    const kind = financialKind === "receivable" || invoiceConsidersSale(invoice)
+      ? "Entrada"
+      : financialKind === "payable" || invoiceConsidersCost(invoice)
+        ? "Saída"
+        : null;
+    if (!kind) return [];
+    return invoiceInstallments(invoice)
+      .filter((installment) => installment.paid && installment.paymentDate)
+      .map((installment) => ({
+        id: `invoice_${invoice.id}_${installment.id}`,
+        source: "invoice" as const,
+        date: installment.paymentDate || today,
+        action: kind,
+        holder: installment.holder || "Itaú",
+        costCenter: invoice.costCenter || invoice.items?.[0]?.costCenter || (kind === "Entrada" ? "Vendas" : "Sem centro de custo"),
+        history: `${kind === "Entrada" ? "Recebimento" : "Pagamento"} NF-e N° ${invoice.invoiceNumber} - ${invoice.partyName}`,
+        amount: kind === "Entrada" ? installmentTotal(installment) : -installmentTotal(installment),
+      }));
+  });
+
+  const manualEntries: CashExtractEntry[] = cashMovements.flatMap<CashExtractEntry>((movement) => {
+    if (movement.movementType === "transfer") {
+      return [
+        {
+          id: `${movement.id}_source`,
+          source: "manual" as const,
+          manualId: movement.id,
+          date: movement.date,
+          action: "Transferência" as const,
+          holder: movement.holder,
+          costCenter: movement.costCenter || "Transferência",
+          history: `${movement.history || "Transferência entre contas"} - destino ${movement.destinationHolder || "-"}`,
+          amount: -Math.abs(movement.amount),
+          movement,
+        },
+        {
+          id: `${movement.id}_destination`,
+          source: "manual" as const,
+          manualId: movement.id,
+          date: movement.date,
+          action: "Transferência" as const,
+          holder: movement.destinationHolder || "",
+          costCenter: movement.destinationCostCenter || movement.costCenter || "Transferência",
+          history: `${movement.history || "Transferência entre contas"} - origem ${movement.holder}`,
+          amount: Math.abs(movement.amount),
+          movement,
+        },
+      ];
+    }
+
+    const isEntry = movement.movementType === "entry";
+    return [
+      {
+        id: movement.id,
+        source: "manual" as const,
+        manualId: movement.id,
+        date: movement.date,
+        action: isEntry ? "Entrada" : "Saída",
+        holder: movement.holder,
+        costCenter: movement.costCenter || "Sem centro de custo",
+        history: movement.history,
+        amount: isEntry ? Math.abs(movement.amount) : -Math.abs(movement.amount),
+        movement,
+      },
+    ];
+  });
+
+  const allEntries = [...invoiceEntries, ...manualEntries]
+    .filter((entry) => withinDateRange(entry.date, startDate, endDate))
+    .filter((entry) => holderFilter === "all" || entry.holder === holderFilter)
+    .filter((entry) => costCenterFilter === "all" || entry.costCenter === costCenterFilter)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.holder.localeCompare(b.holder));
+
+  const costCenters = Array.from(new Set([...fiscalConfig.costCenters, ...allEntries.map((entry) => entry.costCenter)].filter(Boolean)));
+  const holders = Array.from(new Set([...holderOptions, ...cashMovements.flatMap((item) => [item.holder, item.destinationHolder || ""])].filter(Boolean)));
+  const totalIn = allEntries.filter((entry) => entry.amount > 0).reduce((total, entry) => total + entry.amount, 0);
+  const totalOut = Math.abs(allEntries.filter((entry) => entry.amount < 0).reduce((total, entry) => total + entry.amount, 0));
+  const balance = totalIn - totalOut;
+  const groupedDates = Array.from(new Set(allEntries.map((entry) => entry.date)));
+
+  const openNew = (type: CashMovementType = "entry") => {
+    setEditingMovement(null);
+    setMovementType(type);
+    setShowForm(true);
+  };
+
+  const openEdit = (movement: CashMovement) => {
+    if (!window.confirm("Tem certeza que deseja alterar este movimento?")) return;
+    setEditingMovement(movement);
+    setMovementType(movement.movementType);
+    setShowForm(true);
+  };
+
+  const submitMovement = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (editingMovement && !window.confirm("Tem certeza que deseja salvar a alteração deste movimento?")) return;
+    const form = new FormData(event.currentTarget);
+    const now = new Date().toISOString();
+    onSaveMovement({
+      id: editingMovement?.id || newId("cash"),
+      movementType,
+      date: String(form.get("date") || today),
+      holder: String(form.get("holder") || "Itaú"),
+      destinationHolder: movementType === "transfer" ? String(form.get("destinationHolder") || "") : undefined,
+      costCenter: String(form.get("costCenter") || ""),
+      destinationCostCenter: movementType === "transfer" ? String(form.get("destinationCostCenter") || "") : undefined,
+      history: String(form.get("history") || ""),
+      amount: Math.abs(cleanNumber(form.get("amount"))),
+      createdAt: editingMovement?.createdAt || now,
+      updatedAt: now,
+    });
+    setShowForm(false);
+    setEditingMovement(null);
+  };
+
+  const deleteMovement = () => {
+    if (!editingMovement) return;
+    if (!window.confirm("Tem certeza que deseja excluir este movimento?")) return;
+    onDeleteMovement(editingMovement.id);
+    setEditingMovement(null);
+    setShowForm(false);
+  };
+
+  return (
+    <div className="view-stack">
+      <section className="toolbar cash-toolbar">
+        <div className="filters">
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Portador</span>
+            <select value={holderFilter} onChange={(event) => setHolderFilter(event.target.value)}>
+              <option value="all">Todos</option>
+              {holders.map((holder) => (
+                <option key={holder} value={holder}>{holder}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            <span>Centro de custo</span>
+            <select value={costCenterFilter} onChange={(event) => setCostCenterFilter(event.target.value)}>
+              <option value="all">Todos</option>
+              {costCenters.map((center) => (
+                <option key={center} value={center}>{center}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div className="toolbar-actions">
+          <ActionButton icon={Plus} onClick={() => openNew("entry")}>Novo</ActionButton>
+        </div>
+      </section>
+
+      <section className="stats-grid three">
+        <StatCard title="Entradas liquidadas" value={formatCurrency(totalIn)} tone="good" />
+        <StatCard title="Saídas liquidadas" value={formatCurrency(totalOut)} tone="danger" />
+        <StatCard title="Resultado do período" value={formatCurrency(balance)} tone={balance >= 0 ? "good" : "danger"} />
+      </section>
+
+      {showForm && (
+        <section className="panel">
+          <div className="panel-title between">
+            <h2>{editingMovement ? "Editar lançamento manual" : "Novo lançamento manual"}</h2>
+            <button className="icon-btn" type="button" title="Cancelar" onClick={() => { setShowForm(false); setEditingMovement(null); }}>
+              <X size={16} />
+            </button>
+          </div>
+          <form className="form-grid cash-form" onSubmit={submitMovement}>
+            <label className="field">
+              <span>Tipo</span>
+              <select value={movementType} onChange={(event) => setMovementType(event.target.value as CashMovementType)}>
+                <option value="entry">E - Entrada</option>
+                <option value="outflow">S - Saída</option>
+                <option value="transfer">T - Transferência</option>
+              </select>
+            </label>
+            <Field label="Data" name="date" type="date" defaultValue={editingMovement?.date || today} required />
+            <Field label={movementType === "transfer" ? "Conta origem" : "Portador"} name="holder" options={holderOptions} defaultValue={editingMovement?.holder || "Itaú"} />
+            {movementType === "transfer" && (
+              <Field label="Conta destino" name="destinationHolder" options={holderOptions} defaultValue={editingMovement?.destinationHolder || "Sicredi"} />
+            )}
+            <Field label="Centro custo" name="costCenter" options={fiscalConfig.costCenters} defaultValue={editingMovement?.costCenter || ""} />
+            {movementType === "transfer" && (
+              <Field label="Centro custo destino" name="destinationCostCenter" options={fiscalConfig.costCenters} defaultValue={editingMovement?.destinationCostCenter || editingMovement?.costCenter || ""} />
+            )}
+            <MoneyField label="Valor" name="amount" defaultValue={formatCurrency(editingMovement?.amount || 0)} />
+            <label className="field wide">
+              <span>Histórico</span>
+              <textarea name="history" defaultValue={editingMovement?.history || ""} />
+            </label>
+            <div className="form-actions inline">
+              <ActionButton icon={Save} type="submit">{editingMovement ? "Salvar alteração" : "Salvar"}</ActionButton>
+              {editingMovement && (
+                <ActionButton icon={X} variant="danger" onClick={deleteMovement}>Excluir</ActionButton>
+              )}
+              <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingMovement(null); }}>Cancelar</ActionButton>
+            </div>
+          </form>
+        </section>
+      )}
+
+      <section className="panel cash-panel">
+        <div className="panel-title between">
+          <h2>Extrato do caixa</h2>
+          <span className="muted">{allEntries.length} liquidações no período</span>
+        </div>
+        <table className="static-table cash-table">
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Ação</th>
+              <th>Conta</th>
+              <th>Centro de custo</th>
+              <th>Histórico</th>
+              <th>Valor</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groupedDates.map((date) => {
+              const rows = allEntries.filter((entry) => entry.date === date);
+              const dayResult = rows.reduce((total, entry) => total + entry.amount, 0);
+              return (
+                <>
+                  <tr className="date-group-row" key={`${date}_group`}>
+                    <td colSpan={7}>{formatDate(date)} · Resultado do dia: {formatCurrency(dayResult)}</td>
+                  </tr>
+                  {rows.map((entry) => (
+                    <tr key={entry.id}>
+                      <td>{formatDate(entry.date)}</td>
+                      <td>{entry.action}</td>
+                      <td>{entry.holder || "-"}</td>
+                      <td>{entry.costCenter || "-"}</td>
+                      <td>{entry.history}</td>
+                      <td className={entry.amount < 0 ? "money-negative" : "money-positive"}>{formatCurrency(entry.amount)}</td>
+                      <td>
+                        {entry.source === "manual" && entry.movement ? (
+                          <button className="icon-btn" type="button" title="Editar" onClick={() => openEdit(entry.movement!)}>
+                            <Pencil size={15} />
+                          </button>
+                        ) : (
+                          <span className="muted">Nota</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </>
+              );
+            })}
+            {!allEntries.length && (
+              <tr>
+                <td colSpan={7}>Nenhuma liquidação encontrada no período.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </section>
     </div>
   );
@@ -2859,6 +3763,150 @@ function RegistrationsView({
           </div>
         </section>
       ))}
+    </div>
+  );
+}
+
+function ProductsView({
+  products,
+  onSave,
+  onDelete,
+  canEdit,
+}: {
+  products: ProductItem[];
+  onSave: (product: ProductItem) => void;
+  onDelete: (id: string) => void;
+  canEdit: boolean;
+}) {
+  const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
+
+  function saveProduct(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canEdit) return;
+    if (editingProduct && !window.confirm("Tem certeza que deseja salvar as alterações deste produto?")) return;
+    const form = new FormData(event.currentTarget);
+    const now = new Date().toISOString();
+    onSave({
+      id: editingProduct?.id || newId("prod"),
+      name: String(form.get("name") || "").trim(),
+      ncm: onlyDigits(String(form.get("ncm") || "")),
+      defaultCostCenter: String(form.get("defaultCostCenter") || ""),
+      defaultCategory: String(form.get("defaultCategory") || ""),
+      defaultUnit: String(form.get("defaultUnit") || "UN"),
+      accountingAccount: String(form.get("accountingAccount") || ""),
+      color: String(form.get("color") || ""),
+      active: form.get("active") === "on",
+      createdAt: editingProduct?.createdAt || now,
+      updatedAt: now,
+    });
+    setEditingProduct(null);
+    event.currentTarget.reset();
+  }
+
+  return (
+    <div className="view-stack">
+      <section className="panel add-registration-panel">
+        <div>
+          <h2>Cadastro de Produtos</h2>
+          <p className="muted">Produtos comprados usados nas notas recebidas, com padrões que podem ser ajustados no lançamento.</p>
+        </div>
+      </section>
+
+      {canEdit && (
+        <section className="panel" key={editingProduct?.id || "new-product"}>
+          <div className="panel-title between">
+            <h2>{editingProduct ? "Alterar produto" : "Novo produto"}</h2>
+            {editingProduct && (
+              <ActionButton icon={X} variant="ghost" onClick={() => setEditingProduct(null)}>
+                Cancelar
+              </ActionButton>
+            )}
+          </div>
+          <form className="form-grid" onSubmit={saveProduct}>
+            <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
+            <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+            <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
+            <Field label="Categoria padrão" name="defaultCategory" options={fiscalConfig.categories} defaultValue={editingProduct?.defaultCategory || ""} />
+            <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
+            <Field label="Conta contábil padrão" name="accountingAccount" defaultValue={editingProduct?.accountingAccount || ""} />
+            <Field label="Cor" name="color" defaultValue={editingProduct?.color || ""} sanitize="letters" />
+            <label className="check align-end">
+              <input name="active" type="checkbox" defaultChecked={editingProduct?.active ?? true} />
+              Produto ativo
+            </label>
+            <div className="form-actions inline">
+              <ActionButton icon={Save} type="submit">
+                Salvar produto
+              </ActionButton>
+            </div>
+          </form>
+        </section>
+      )}
+
+      <section className="panel">
+        <h2>Produtos cadastrados</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>NCM</th>
+                <th>Centro de custo padrão</th>
+                <th>Categoria</th>
+                <th>Unidade</th>
+                <th>Conta contábil</th>
+                <th>Cor</th>
+                <th>Ativo</th>
+                {canEdit && <th>Ações</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((product) => (
+                <tr key={product.id}>
+                  <td>{product.name}</td>
+                  <td>{product.ncm}</td>
+                  <td>{product.defaultCostCenter}</td>
+                  <td>{product.defaultCategory}</td>
+                  <td>{product.defaultUnit}</td>
+                  <td>{product.accountingAccount}</td>
+                  <td>{product.color}</td>
+                  <td>{product.active ? "Sim" : "Não"}</td>
+                  {canEdit && (
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="icon-btn"
+                          title="Editar produto"
+                          type="button"
+                          onClick={() => {
+                            if (!window.confirm("Tem certeza que deseja editar este produto?")) return;
+                            setEditingProduct(product);
+                          }}
+                        >
+                          <Pencil size={16} />
+                        </button>
+                        <button
+                          className="icon-btn danger"
+                          title="Excluir produto"
+                          type="button"
+                          onClick={() => window.confirm("Tem certeza que deseja excluir este produto?") && onDelete(product.id)}
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {!products.length && (
+                <tr>
+                  <td colSpan={canEdit ? 9 : 8}>Nenhum produto cadastrado.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
@@ -3380,6 +4428,7 @@ export default function App() {
               invoices={store.invoices}
               operations={store.linkedOperations}
               parties={registryParties}
+              products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
               canEdit={canEdit}
               onSave={store.saveInvoice}
@@ -3398,6 +4447,7 @@ export default function App() {
               invoices={store.invoices}
               operations={store.linkedOperations}
               parties={registryParties}
+              products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
               canEdit={canEdit}
               onSave={store.saveInvoice}
@@ -3421,6 +4471,24 @@ export default function App() {
               onBankBalanceSave={saveBankBalance}
             />
           )}
+          {view === "bills" && (
+            <BillFormView
+              invoices={store.invoices}
+              parties={registryParties}
+              onSave={store.saveInvoice}
+              onDelete={store.deleteInvoice}
+              onAddParty={openRegistration}
+            />
+          )}
+          {view === "cash" && (
+            <CashView
+              invoices={store.invoices}
+              cashMovements={store.cashMovements}
+              onSaveMovement={store.saveCashMovement}
+              onDeleteMovement={store.deleteCashMovement}
+            />
+          )}
+          {view === "products" && <ProductsView products={store.products} onSave={store.saveProduct} onDelete={store.deleteProduct} canEdit={canEdit} />}
           {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}

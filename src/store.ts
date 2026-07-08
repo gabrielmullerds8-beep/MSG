@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount } from "./data";
 import { supabase } from "./supabase";
-import { AssetItem, Invoice, InvoiceItem, LinkedOperation } from "./types";
+import { AssetItem, CashMovement, Invoice, InvoiceItem, LinkedOperation, ProductItem } from "./types";
 
 const invoiceToRow = (invoice: Invoice) => ({
   id: invoice.id,
@@ -34,6 +34,9 @@ const invoiceToRow = (invoice: Invoice) => ({
   cost_center: invoice.costCenter || null,
   total_products: invoice.totalProducts,
   freight_value: invoice.freightValue,
+  discount_value: invoice.discountValue || 0,
+  retention_type: invoice.retentionType || null,
+  retention_value: invoice.retentionValue || 0,
   total_invoice: invoice.totalInvoice,
   icms_base: invoice.icmsBase,
   icms_value: invoice.icmsValue,
@@ -95,6 +98,9 @@ const rowToInvoice = (row: Record<string, any>): Invoice => ({
   costCenter: row.cost_center || undefined,
   totalProducts: Number(row.total_products || 0),
   freightValue: Number(row.freight_value || 0),
+  discountValue: Number(row.discount_value || 0),
+  retentionType: row.retention_type || undefined,
+  retentionValue: Number(row.retention_value || 0),
   totalInvoice: Number(row.total_invoice || 0),
   icmsBase: Number(row.icms_base || 0),
   icmsValue: Number(row.icms_value || 0),
@@ -201,10 +207,68 @@ const rowToAsset = (row: Record<string, any>): AssetItem => ({
   updatedAt: row.updated_at,
 });
 
+const cashMovementToRow = (movement: CashMovement) => ({
+  id: movement.id,
+  movement_type: movement.movementType,
+  movement_date: movement.date,
+  holder: movement.holder,
+  destination_holder: movement.destinationHolder || null,
+  cost_center: movement.costCenter || null,
+  destination_cost_center: movement.destinationCostCenter || null,
+  history: movement.history || "",
+  amount: movement.amount,
+  created_at: movement.createdAt,
+  updated_at: movement.updatedAt,
+});
+
+const rowToCashMovement = (row: Record<string, any>): CashMovement => ({
+  id: row.id,
+  movementType: row.movement_type,
+  date: row.movement_date,
+  holder: row.holder || "",
+  destinationHolder: row.destination_holder || undefined,
+  costCenter: row.cost_center || "",
+  destinationCostCenter: row.destination_cost_center || undefined,
+  history: row.history || "",
+  amount: Number(row.amount || 0),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
+const productToRow = (product: ProductItem) => ({
+  id: product.id,
+  name: product.name,
+  ncm: product.ncm || null,
+  default_cost_center: product.defaultCostCenter || null,
+  default_category: product.defaultCategory || null,
+  default_unit: product.defaultUnit || null,
+  accounting_account: product.accountingAccount || null,
+  color: product.color || null,
+  active: product.active,
+  created_at: product.createdAt,
+  updated_at: product.updatedAt,
+});
+
+const rowToProduct = (row: Record<string, any>): ProductItem => ({
+  id: row.id,
+  name: row.name,
+  ncm: row.ncm || "",
+  defaultCostCenter: row.default_cost_center || "",
+  defaultCategory: row.default_category || "",
+  defaultUnit: row.default_unit || "UN",
+  accountingAccount: row.accounting_account || "",
+  color: row.color || "",
+  active: Boolean(row.active),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+});
+
 export function useFiscalStore() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [linkedOperations, setLinkedOperations] = useState<LinkedOperation[]>([]);
   const [assets, setAssets] = useState<AssetItem[]>([]);
+  const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
+  const [products, setProducts] = useState<ProductItem[]>([]);
   const [syncMode, setSyncMode] = useState<"offline" | "supabase">("offline");
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<string | null>(null);
@@ -224,21 +288,25 @@ export function useFiscalStore() {
           setInvoices([]);
           setLinkedOperations([]);
           setAssets([]);
+          setCashMovements([]);
+          setProducts([]);
           setSyncMode("offline");
           setSyncing(false);
         }
         return;
       }
 
-      const [invoiceResult, operationResult, assetResult] = await Promise.all([
+      const [invoiceResult, operationResult, assetResult, cashMovementResult, productResult] = await Promise.all([
         client.from("invoices").select("*").order("issue_date", { ascending: false }),
         client.from("linked_operations").select("*").order("operation_date", { ascending: false }),
         client.from("assets").select("*").order("acquisition_date", { ascending: false }),
+        client.from("cash_movements").select("*").order("movement_date", { ascending: false }),
+        client.from("products").select("*").order("name", { ascending: true }),
       ]);
 
       if (!mounted) return;
 
-      if (invoiceResult.error || operationResult.error || assetResult.error) {
+      if (invoiceResult.error || operationResult.error || assetResult.error || cashMovementResult.error || productResult.error) {
         setSyncMode("offline");
         setSyncing(false);
         return;
@@ -254,6 +322,14 @@ export function useFiscalStore() {
 
       if (assetResult.data) {
         setAssets(assetResult.data.map(rowToAsset));
+      }
+
+      if (cashMovementResult.data) {
+        setCashMovements(cashMovementResult.data.map(rowToCashMovement));
+      }
+
+      if (productResult.data) {
+        setProducts(productResult.data.map(rowToProduct));
       }
 
       setSyncMode("supabase");
@@ -274,6 +350,8 @@ export function useFiscalStore() {
         setInvoices([]);
         setLinkedOperations([]);
         setAssets([]);
+        setCashMovements([]);
+        setProducts([]);
         setSyncMode("offline");
         setSyncing(false);
       }
@@ -284,6 +362,8 @@ export function useFiscalStore() {
       .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, loadRemote)
       .on("postgres_changes", { event: "*", schema: "public", table: "linked_operations" }, loadRemote)
       .on("postgres_changes", { event: "*", schema: "public", table: "assets" }, loadRemote)
+      .on("postgres_changes", { event: "*", schema: "public", table: "cash_movements" }, loadRemote)
+      .on("postgres_changes", { event: "*", schema: "public", table: "products" }, loadRemote)
       .subscribe();
 
     return () => {
@@ -449,6 +529,102 @@ export function useFiscalStore() {
     setSyncing(false);
   }, []);
 
+  const saveCashMovement = useCallback(async (movement: CashMovement) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase nao configurado. O movimento de caixa nao foi salvo.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("cash_movements").upsert(cashMovementToRow(movement));
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Nao foi possivel salvar o movimento de caixa no Supabase.");
+      return;
+    }
+
+    setCashMovements((current) => {
+      const exists = current.some((item) => item.id === movement.id);
+      return exists ? current.map((item) => (item.id === movement.id ? movement : item)) : [movement, ...current];
+    });
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
+
+  const deleteCashMovement = useCallback(async (id: string) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase nao configurado. O movimento de caixa nao foi excluido.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("cash_movements").delete().eq("id", id);
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Nao foi possivel excluir o movimento de caixa no Supabase.");
+      return;
+    }
+
+    setCashMovements((current) => current.filter((item) => item.id !== id));
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
+
+  const saveProduct = useCallback(async (product: ProductItem) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase nao configurado. O produto nao foi salvo.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("products").upsert(productToRow(product));
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Nao foi possivel salvar o produto no Supabase.");
+      return;
+    }
+
+    setProducts((current) => {
+      const exists = current.some((item) => item.id === product.id);
+      return exists
+        ? current.map((item) => (item.id === product.id ? product : item)).sort((a, b) => a.name.localeCompare(b.name))
+        : [...current, product].sort((a, b) => a.name.localeCompare(b.name));
+    });
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
+
+  const deleteProduct = useCallback(async (id: string) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase nao configurado. O produto nao foi excluido.");
+      return;
+    }
+
+    setSyncing(true);
+    const { error } = await supabase.from("products").delete().eq("id", id);
+    if (error) {
+      setSyncMode("offline");
+      setSyncing(false);
+      window.alert("Nao foi possivel excluir o produto no Supabase.");
+      return;
+    }
+
+    setProducts((current) => current.filter((item) => item.id !== id));
+    setSyncMode("supabase");
+    setLastSync(new Date().toISOString());
+    setSyncing(false);
+  }, []);
+
   const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
   const received = invoices.filter((invoice) => invoice.invoiceType === "received");
   const taxableIssued = issued.filter(invoiceConsidersSale);
@@ -490,6 +666,8 @@ export function useFiscalStore() {
     invoices,
     linkedOperations,
     assets,
+    cashMovements,
+    products,
     totals,
     syncMode,
     syncing,
@@ -501,5 +679,9 @@ export function useFiscalStore() {
     markInvoicePaid,
     saveAsset,
     deleteAsset,
+    saveCashMovement,
+    deleteCashMovement,
+    saveProduct,
+    deleteProduct,
   };
 }

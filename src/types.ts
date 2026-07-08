@@ -17,10 +17,13 @@ export type LinkedStatus =
 
 export interface InvoiceItem {
   id: string;
+  productId?: string;
   itemCode: string;
   description: string;
   category: string;
   costCenter: string;
+  accountingAccount?: string;
+  productColor?: string;
   ncm: string;
   cfop: string;
   cstIcms: string;
@@ -28,6 +31,8 @@ export interface InvoiceItem {
   quantity: number;
   unitValue: number;
   totalValue: number;
+  discountValue?: number;
+  freightValue?: number;
   icmsBase: number;
   icmsRate: number;
   icmsValue: number;
@@ -40,6 +45,15 @@ export interface InvoiceItem {
   cofinsRate?: number;
   cofinsValue: number;
   cofinsCreditable: boolean;
+  ipiBase?: number;
+  ipiRate?: number;
+  ipiValue?: number;
+  ibsBase?: number;
+  ibsRate?: number;
+  ibsValue?: number;
+  cbsBase?: number;
+  cbsRate?: number;
+  cbsValue?: number;
   cfemRate: number;
   cfemValue: number;
   materialType?: string;
@@ -57,6 +71,7 @@ export interface PaymentInstallment {
   id: string;
   paymentCondition: string;
   paymentMethod: string;
+  holder?: string;
   dueDate: string;
   amount: number;
   pfValue: number;
@@ -96,6 +111,9 @@ export interface Invoice {
   costCenter?: string;
   totalProducts: number;
   freightValue: number;
+  discountValue?: number;
+  retentionType?: string;
+  retentionValue?: number;
   totalInvoice: number;
   icmsBase: number;
   icmsValue: number;
@@ -124,6 +142,20 @@ export interface Invoice {
   updatedAt: string;
   items: InvoiceItem[];
   financialInstallments?: PaymentInstallment[];
+}
+
+export interface ProductItem {
+  id: string;
+  name: string;
+  ncm: string;
+  defaultCostCenter: string;
+  defaultCategory: string;
+  defaultUnit: string;
+  accountingAccount: string;
+  color: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface LinkedOperation {
@@ -197,6 +229,22 @@ export interface AssetItem {
   plate?: string;
   registrationNumber?: string;
   archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type CashMovementType = "entry" | "outflow" | "transfer";
+
+export interface CashMovement {
+  id: string;
+  movementType: CashMovementType;
+  date: string;
+  holder: string;
+  destinationHolder?: string;
+  costCenter: string;
+  destinationCostCenter?: string;
+  history: string;
+  amount: number;
   createdAt: string;
   updatedAt: string;
 }
