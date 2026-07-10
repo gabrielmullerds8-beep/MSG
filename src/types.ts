@@ -255,13 +255,14 @@ export interface AssetItem {
 
 export type CashMovementType = "entry" | "outflow" | "transfer";
 
-export type CheckStatus = "received" | "holding" | "passed" | "returned";
+export type CheckStatus = "received" | "holding" | "passed" | "deposited" | "compensated" | "returned" | "canceled";
 
 export interface CheckMovement {
-  type: "received" | "holding" | "passed" | "returned";
+  type: "received" | "holding" | "passed" | "deposited" | "compensated" | "returned" | "recovered" | "canceled";
   date: string;
   partyName: string;
   notes?: string;
+  value?: number;
 }
 
 export interface CheckItem {
@@ -278,6 +279,19 @@ export interface CheckItem {
   receivedFrom: string;
   passedDate?: string;
   passedTo?: string;
+  depositDate?: string;
+  depositHolder?: string;
+  depositAgency?: string;
+  depositAccount?: string;
+  compensationDate?: string;
+  compensationHolder?: string;
+  returnedDate?: string;
+  returnedReason?: string;
+  recoveredDate?: string;
+  recoveredFrom?: string;
+  recoveryReason?: string;
+  canceledDate?: string;
+  canceledReason?: string;
   relatedInvoices: string[];
   notes?: string;
   status: CheckStatus;

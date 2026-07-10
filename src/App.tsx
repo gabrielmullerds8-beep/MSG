@@ -6,6 +6,7 @@ import {
   Bell,
   Building2,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   Database,
   Download,
@@ -69,8 +70,10 @@ type View =
   | "linked"
   | "search"
   | "tax"
-  | "financial"
-  | "financial-pf"
+  | "financial-receivable"
+  | "financial-payable"
+  | "financial-pf-receivable"
+  | "financial-pf-payable"
   | "checks"
   | "bills"
   | "closures"
@@ -86,30 +89,46 @@ type View =
 
 const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
-  { id: "financial", label: "Financeiro", icon: Database },
-  { id: "financial-pf", label: "Financeiro PF", icon: Database },
-  { id: "cash", label: "Caixa", icon: Database },
-  { id: "cash-pf", label: "Caixa PF", icon: Database },
-  { id: "checks", label: "Cheques", icon: CheckCircle2 },
   { id: "dre", label: "DRE", icon: BarChart3 },
   { id: "assets", label: "Patrimônio", icon: Building2 },
-  { id: "issued", label: "Notas Emitidas", icon: FileOutput },
-  { id: "received", label: "Notas Recebidas", icon: FileInput },
-  { id: "bills", label: "Faturas", icon: Files },
-  { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
   { id: "closures", label: "Fechamentos", icon: Lock },
-  { id: "linked", label: "Operações Vinculadas", icon: Link2 },
-  { id: "new-issued", label: "Nova Nota Emitida", icon: Plus },
-  { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
   { id: "registrations", label: "Cadastros", icon: Building2 },
   { id: "products", label: "Produtos", icon: PackagePlus },
-  { id: "conference", label: "Conferência", icon: AlertTriangle },
   { id: "settings", label: "Configurações", icon: Settings },
   { id: "backup", label: "Backup", icon: Database },
 ];
 
+const financialViews: Array<{ id: View; label: string; icon: any }> = [
+  { id: "financial-receivable", label: "Contas a Receber", icon: Database },
+  { id: "financial-payable", label: "Contas a Pagar", icon: Database },
+  { id: "financial-pf-receivable", label: "Contas a Receber PF", icon: Database },
+  { id: "financial-pf-payable", label: "Contas a Pagar PF", icon: Database },
+  { id: "cash", label: "Caixa", icon: Database },
+  { id: "cash-pf", label: "Caixa PF", icon: Database },
+  { id: "checks", label: "Cheques", icon: CheckCircle2 },
+];
+
+const noteViews: Array<{ id: View; label: string; icon: any }> = [
+  { id: "issued", label: "Notas Emitidas", icon: FileOutput },
+  { id: "received", label: "Notas Recebidas", icon: FileInput },
+  { id: "bills", label: "Faturas", icon: Files },
+  { id: "new-issued", label: "Nova Nota Emitida", icon: Plus },
+  { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
+];
+
+const fiscalViews: Array<{ id: View; label: string; icon: any }> = [
+  { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
+  { id: "linked", label: "Operações Vinculadas", icon: Link2 },
+  { id: "conference", label: "Conferência", icon: AlertTriangle },
+];
+
+const financialViewIds = new Set<View>(financialViews.map((item) => item.id));
+const noteViewIds = new Set<View>(noteViews.map((item) => item.id));
+const fiscalViewIds = new Set<View>(fiscalViews.map((item) => item.id));
+const viewTitles = [...views, ...financialViews, ...noteViews, ...fiscalViews];
+
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
-const unitOptions = ["UN", "KG", "TN", "MT", "PC", "SV"];
+const unitOptions = ["UN", "KG", "M3", "TN", "TON", "MT", "PC", "SV", "BR"];
 const holderOptions = ["Itaú", "Sicredi", "Itaú Mailson"];
 const paymentConditionOptions = ["a prazo", "à vista", "sem pagamento"];
 const paymentMethodOptions = ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"];
@@ -117,11 +136,37 @@ const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quint
 type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
 type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories">;
 const configList = (list: string[] | undefined, fallback: string[]) => (list?.length ? list : fallback);
-const operationTypeOptions = ["Venda de Produção", "Devolução", "Remessa para Industrialização", "Remessa para Conserto", "Remessa para armazenagem"];
+const operationTypeOptions = [
+  "Venda de Produção",
+  "Devolução",
+  "Remessa para Industrialização",
+  "Remessa para Conserto",
+  "Remessa para armazenagem",
+  "Entrada",
+  "Serviço tomado",
+  "A pagar",
+  "Compra com triangulação",
+  "Conhecimento de frete",
+];
 const configuredHolders = () => configList(fiscalConfig.holders, holderOptions);
 const configuredPaymentConditions = () => configList(fiscalConfig.paymentConditions, paymentConditionOptions);
 const configuredPaymentMethods = () => configList(fiscalConfig.paymentMethods, paymentMethodOptions);
 const configuredOperationTypes = () => configList(fiscalConfig.operationTypes, operationTypeOptions);
+const findProductForItem = (products: ProductItem[], item?: InvoiceItem) => {
+  if (!item) return undefined;
+  if (item.productId) {
+    const linkedProduct = products.find((product) => product.id === item.productId);
+    if (linkedProduct) return linkedProduct;
+  }
+  const itemNcm = onlyDigits(item.ncm);
+  const itemDescription = normalizeSearch(item.description);
+  return products.find((product) => {
+    const productName = normalizeSearch(product.name);
+    const sameNcm = Boolean(itemNcm && onlyDigits(product.ncm) === itemNcm);
+    const nameMatches = Boolean(productName && itemDescription.includes(productName));
+    return sameNcm && nameMatches;
+  });
+};
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
@@ -602,7 +647,7 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   return {
     id: newId("item"),
     productId: String(form.get(`productId${suffix}`) || ""),
-    itemCode: "",
+    itemCode: String(form.get(`itemCode${suffix}`) || ""),
     description: String(form.get(`description${suffix}`) || ""),
     category: String(form.get(`category${suffix}`) || ""),
     costCenter: String(form.get(`costCenter${suffix}`) || ""),
@@ -652,8 +697,16 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   };
 }
 
-function Badge({ value }: { value: string }) {
-  const kind = value.includes("Cancelada")
+function Badge({ value, tone }: { value: string; tone?: "good" | "info" | "warn" | "danger" }) {
+  const kind = tone === "good"
+    ? "ok"
+    : tone === "info"
+      ? "info"
+      : tone === "danger"
+        ? "danger"
+        : tone === "warn"
+          ? "warn"
+          : value.includes("Cancelada")
     || value.includes("Devolvido")
     ? "danger"
     : value.includes("Pendente") || value.includes("Aberta")
@@ -1730,7 +1783,7 @@ function InvoiceForm({
     editingInvoice?.financialInstallments?.length ? editingInvoice.financialInstallments.map((_, index) => index) : [0],
   );
   const [selectedProducts, setSelectedProducts] = useState<Record<number, string>>(() =>
-    Object.fromEntries((editingInvoice?.items || []).map((item, index) => [index, item.productId || ""])),
+    Object.fromEntries((editingInvoice?.items || []).map((item, index) => [index, item.productId || findProductForItem(products, item)?.id || ""])),
   );
   const [itemTotals, setItemTotals] = useState(() => ({
     products: editingInvoice?.totalProducts || 0,
@@ -2227,7 +2280,7 @@ function InvoiceForm({
         <div className="items-stack">
           {itemIndexes.map((itemIndex, position) => {
             const existingItem = editingInvoice?.items[position];
-            const selectedProductId = selectedProducts[itemIndex] || existingItem?.productId || "";
+            const selectedProductId = selectedProducts[itemIndex] || existingItem?.productId || findProductForItem(products, existingItem)?.id || "";
             const selectedProduct = products.find((product) => product.id === selectedProductId);
             const taxIsEnabled = (base?: number, value?: number, rate?: number) => Boolean(Number(base || 0) || Number(value || 0) || Number(rate || 0));
             const taxBaseValue = formatCurrency(existingItem?.icmsBase || existingItem?.pisBase || existingItem?.cofinsBase || existingItem?.totalValue || 0);
@@ -2259,7 +2312,7 @@ function InvoiceForm({
                         required
                       >
                         <option value="">Selecione</option>
-                        {products.filter((product) => product.active).map((product) => (
+                        {products.filter((product) => product.active || product.id === selectedProductId).map((product) => (
                           <option key={product.id} value={product.id}>
                             {product.name}
                           </option>
@@ -2267,6 +2320,9 @@ function InvoiceForm({
                       </select>
                     </label>
                     <ReadOnlyField label="Descrição do produto/serviço" name={`description_${itemIndex}`} value={selectedProduct?.name || existingItem?.description || ""} />
+                    <input name={`itemCode_${itemIndex}`} type="hidden" value={selectedProduct?.code || existingItem?.itemCode || ""} readOnly />
+                    <input name={`category_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCategory || existingItem?.category || ""} readOnly />
+                    <input name={`costCenter_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCostCenter || existingItem?.costCenter || ""} readOnly />
                   </>
                 ) : (
                   <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="letters" />
@@ -3103,6 +3159,7 @@ function FinancialView({
   bankBalanceValue,
   onBankBalanceSave,
   mode = "normal",
+  fixedType,
 }: {
   invoices: Invoice[];
   onSave: (invoice: Invoice) => boolean | void;
@@ -3111,11 +3168,12 @@ function FinancialView({
   bankBalanceValue: number;
   onBankBalanceSave: (value: number) => void;
   mode?: "normal" | "pf";
+  fixedType?: "receivable" | "payable";
 }) {
   const today = todayIso();
   const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
   const [endDate, setEndDate] = useState(today);
-  const [listType, setListType] = useState<"all" | "receivable" | "payable">("all");
+  const [listType, setListType] = useState<"all" | "receivable" | "payable">(fixedType || "all");
   const [statusFilter, setStatusFilter] = useState<"all" | "open" | "paid">("open");
   const [holderFilter, setHolderFilter] = useState("all");
   const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
@@ -3128,6 +3186,9 @@ function FinancialView({
   useEffect(() => {
     setBankBalance(formatCurrency(bankBalanceValue));
   }, [bankBalanceValue]);
+  useEffect(() => {
+    if (fixedType) setListType(fixedType);
+  }, [fixedType]);
   const addDays = (days: number) => {
     const date = new Date(`${today}T00:00:00`);
     date.setDate(date.getDate() + days);
@@ -3209,17 +3270,9 @@ function FinancialView({
   const flow30 = currentBankBalance + flow30Parts.receive - flow30Parts.pay;
   const flow60 = currentBankBalance + flow60Parts.receive - flow60Parts.pay;
   const flow90 = currentBankBalance + flow90Parts.receive - flow90Parts.pay;
-  const receiveFlowChart = [
-    { name: "Saldo atual", value: chartValue(currentBankBalance), color: "#2563eb" },
-    { name: "30 dias", value: chartValue(flow30Parts.receive), color: "#16a34a" },
-    { name: "60 dias", value: chartValue(flow60Parts.receive - flow30Parts.receive), color: "#22c55e" },
-    { name: "90 dias", value: chartValue(flow90Parts.receive - flow60Parts.receive), color: "#86efac" },
-  ];
-  const payFlowChart = [
-    { name: "Saldo atual", value: chartValue(currentBankBalance), color: "#2563eb" },
-    { name: "30 dias", value: chartValue(flow30Parts.pay), color: "#dc2626" },
-    { name: "60 dias", value: chartValue(flow60Parts.pay - flow30Parts.pay), color: "#f97316" },
-    { name: "90 dias", value: chartValue(flow90Parts.pay - flow60Parts.pay), color: "#fdba74" },
+  const comparisonFlowChart = [
+    { name: "A receber", value: chartValue(sumTotal(receivables)), color: "#16a34a" },
+    { name: "A pagar", value: chartValue(sumTotal(payables)), color: "#dc2626" },
   ];
   const visiblePayables = listType === "receivable" ? [] : payables;
   const visibleReceivables = listType === "payable" ? [] : receivables;
@@ -3308,10 +3361,8 @@ function FinancialView({
         <thead>
           <tr>
             <th>Data</th>
-            <th>Categorias financeiras</th>
             <th>{partyLabel}</th>
             <th>Nota fiscal</th>
-            <th>Observações / Descrição</th>
             <th>Parcela</th>
             <th>Valor (R$)</th>
             <th>Pago</th>
@@ -3323,14 +3374,11 @@ function FinancialView({
           {items.map((entry) => {
             const amount = entryAmount(entry);
             const rowTone = entry.kind === "payable" ? "finance-row-payable" : "finance-row-receivable";
-            const description = entryNotes(entry) || entry.invoice.additionalInfo || entry.invoice.items?.[0]?.description || "-";
             return (
             <tr key={entry.id} className={rowTone}>
               <td>{formatDate(entry.installment.dueDate)}</td>
-              <td>{entry.invoice.category || entry.invoice.costCenter || entry.invoice.items?.[0]?.category || "-"}</td>
               <td>{entry.invoice.partyName}</td>
               <td>{entry.invoice.invoiceNumber || "-"}</td>
-              <td>{description}</td>
               <td>{entry.position}/{entry.totalInstallments}</td>
               <td className={entry.kind === "payable" ? "money-negative" : "money-positive"}>{formatCurrency(amount)}</td>
               <td>
@@ -3352,7 +3400,7 @@ function FinancialView({
           })}
           {!items.length && (
             <tr>
-              <td colSpan={10}>Nenhum lançamento no período.</td>
+              <td colSpan={8}>Nenhum lançamento no período.</td>
             </tr>
           )}
         </tbody>
@@ -3372,14 +3420,14 @@ function FinancialView({
             <span>Data final</span>
             <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
           </label>
-          <label className="field">
+          {!fixedType && <label className="field">
             <span>Tipo</span>
             <select value={listType} onChange={(event) => setListType(event.target.value as typeof listType)}>
               <option value="all">A receber e a pagar</option>
               <option value="receivable">A receber</option>
               <option value="payable">A pagar</option>
             </select>
-          </label>
+          </label>}
           <label className="field">
             <span>Situação</span>
             <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
@@ -3422,7 +3470,7 @@ function FinancialView({
         <StatCard title="Fluxo 60 dias" value={formatCurrency(flow60)} tone={flow60 >= 0 ? "good" : "danger"} />
         <StatCard title="Fluxo 90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
       </section>
-      <section className="split-grid">
+      <section className={fixedType ? "single-grid" : "split-grid"}>
         {!!visibleReceivables.length || listType !== "payable" ? <section className="panel financial-list-panel">
           <h2>Contas a receber</h2>
           {renderRows(visibleReceivables, "Cliente")}
@@ -3432,9 +3480,8 @@ function FinancialView({
           {renderRows(visiblePayables, "Fornecedor")}
         </section> : null}
       </section>
-      <section className="split-grid">
-        <FinancePie title="Fluxo a receber" data={receiveFlowChart} />
-        <FinancePie title="Fluxo a pagar" data={payFlowChart} />
+      <section className="single-grid">
+        <FinancePie title="Comparativo financeiro" data={comparisonFlowChart} />
       </section>
       {settlementEntry && (
         <div className="modal-backdrop">
@@ -3499,7 +3546,18 @@ const checkStatusLabel = (status: CheckStatus) => {
   if (status === "received") return "Recebido";
   if (status === "holding") return "Em posse";
   if (status === "passed") return "Repassado";
+  if (status === "deposited") return "Depositado";
+  if (status === "compensated") return "Compensado";
+  if (status === "canceled") return "Cancelado";
   return "Devolvido";
+};
+
+const checkStatusTone = (status: CheckStatus) => {
+  if (status === "returned" || status === "canceled") return "danger";
+  if (status === "passed") return "warn";
+  if (status === "deposited") return "info";
+  if (status === "compensated") return "good";
+  return "info";
 };
 
 function ChecksView({
@@ -3511,32 +3569,63 @@ function ChecksView({
   onSave: (check: CheckItem) => void;
   onDelete: (id: string) => void;
 }) {
-  const [filter, setFilter] = useState<"received" | "holding" | "passed">("holding");
+  type CheckFilter = "all" | "received" | "holding" | "passed" | "deposited" | "compensated" | "canceled";
+  type CheckAction = "pass" | "deposit" | "compensate" | "return" | "recover" | "cancel";
+  const [filter, setFilter] = useState<CheckFilter>("holding");
   const [selectedId, setSelectedId] = useState<string>("");
   const [editingCheck, setEditingCheck] = useState<CheckItem | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [passFormOpen, setPassFormOpen] = useState(false);
+  const [activeAction, setActiveAction] = useState<CheckAction | null>(null);
   const sortedChecks = [...checks].sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
   const selectedCheck = sortedChecks.find((check) => check.id === selectedId) || sortedChecks[0];
   const receivedChecks = sortedChecks.filter((check) => check.status === "received" || check.status === "returned");
   const holdingChecks = sortedChecks.filter((check) => check.status === "holding");
   const passedChecks = sortedChecks.filter((check) => check.status === "passed");
-  const filteredChecks = filter === "received" ? receivedChecks : filter === "holding" ? holdingChecks : passedChecks;
+  const depositedChecks = sortedChecks.filter((check) => check.status === "deposited");
+  const compensatedChecks = sortedChecks.filter((check) => check.status === "compensated");
+  const returnedChecks = sortedChecks.filter((check) => check.status === "returned");
+  const canceledChecks = sortedChecks.filter((check) => check.status === "canceled");
+  const filteredChecks = filter === "all"
+    ? sortedChecks
+    : filter === "received"
+      ? receivedChecks
+      : filter === "holding"
+        ? holdingChecks
+        : filter === "passed"
+          ? passedChecks
+          : filter === "deposited"
+            ? depositedChecks
+            : filter === "compensated"
+              ? compensatedChecks
+              : canceledChecks;
   const totalInChecks = sortedChecks
-    .filter((check) => check.status !== "passed")
+    .filter((check) => check.status !== "compensated" && check.status !== "canceled")
     .reduce((total, check) => total + Number(check.amount || 0), 0);
+  const sumChecks = (items: CheckItem[]) => items.reduce((total, check) => total + Number(check.amount || 0), 0);
+  const dueSoonChecks = sortedChecks.filter((check) => {
+    if (["compensated", "canceled"].includes(check.status)) return false;
+    const due = new Date(`${check.dueDate}T00:00:00`);
+    const now = new Date(`${todayIso()}T00:00:00`);
+    const limit = new Date(now);
+    limit.setDate(limit.getDate() + 7);
+    return due >= now && due <= limit;
+  });
+  const overdueChecks = sortedChecks.filter((check) => {
+    if (["compensated", "canceled"].includes(check.status)) return false;
+    return check.dueDate < todayIso();
+  });
 
   const startNew = () => {
     setEditingCheck(null);
     setShowForm(true);
-    setPassFormOpen(false);
+    setActiveAction(null);
   };
 
   const editCheck = (check: CheckItem) => {
     if (!window.confirm("Tem certeza que deseja alterar este cheque?")) return;
     setEditingCheck(check);
     setShowForm(true);
-    setPassFormOpen(false);
+    setActiveAction(null);
   };
 
   const saveCheck = (event: FormEvent<HTMLFormElement>) => {
@@ -3573,6 +3662,19 @@ function ChecksView({
       receivedFrom: String(form.get("receivedFrom") || ""),
       passedDate: editingCheck?.passedDate,
       passedTo: editingCheck?.passedTo,
+      depositDate: editingCheck?.depositDate,
+      depositHolder: editingCheck?.depositHolder,
+      depositAgency: editingCheck?.depositAgency,
+      depositAccount: editingCheck?.depositAccount,
+      compensationDate: editingCheck?.compensationDate,
+      compensationHolder: editingCheck?.compensationHolder,
+      returnedDate: editingCheck?.returnedDate,
+      returnedReason: editingCheck?.returnedReason,
+      recoveredDate: editingCheck?.recoveredDate,
+      recoveredFrom: editingCheck?.recoveredFrom,
+      recoveryReason: editingCheck?.recoveryReason,
+      canceledDate: editingCheck?.canceledDate,
+      canceledReason: editingCheck?.canceledReason,
       relatedInvoices: String(form.get("relatedInvoices") || "")
         .split(",")
         .map((item) => normalizeNoteNumber(item.trim()) || item.trim())
@@ -3591,12 +3693,11 @@ function ChecksView({
   };
 
   const updateCheckStatus = (check: CheckItem, status: CheckStatus, movement: CheckItem["movements"][number], patch: Partial<CheckItem> = {}) => {
-    const filteredMovements = (check.movements || []).filter((item) => item.type !== movement.type);
     const next = {
       ...check,
       ...patch,
       status,
-      movements: [...filteredMovements, movement],
+      movements: [...(check.movements || []), movement],
       updatedAt: new Date().toISOString(),
     };
     onSave(next);
@@ -3613,54 +3714,135 @@ function ChecksView({
     });
   };
 
-  const markReturned = (check: CheckItem) => {
-    const notes = window.prompt("Informe o motivo da devolução:", "Rasura ou falta de saldo") || "";
-    if (!window.confirm("Confirmar cheque devolvido? Ele voltará para recebidos em vermelho.")) return;
-    updateCheckStatus(check, "returned", {
-      type: "returned",
-      date: todayIso(),
-      partyName: "Banco",
-      notes,
-    }, { passedDate: undefined, passedTo: undefined });
-    setFilter("received");
-  };
-
-  const passCheck = (event: FormEvent<HTMLFormElement>) => {
+  const runCheckAction = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedCheck) return;
+    if (!selectedCheck || !activeAction) return;
     const form = new FormData(event.currentTarget);
-    const passedTo = String(form.get("passedTo") || "");
-    if (!passedTo.trim()) {
-      window.alert("Informe para quem o cheque será repassado.");
-      return;
+    const actionDate = String(form.get("actionDate") || todayIso());
+    const notes = String(form.get("actionNotes") || "");
+
+    if (activeAction === "pass") {
+      const passedTo = String(form.get("passedTo") || "");
+      if (!passedTo.trim()) {
+        window.alert("Informe para quem o cheque será repassado.");
+        return;
+      }
+      if (!window.confirm("Confirmar repasse deste cheque?")) return;
+      const relatedInvoices = String(form.get("relatedInvoices") || "")
+        .split(",")
+        .map((item) => normalizeNoteNumber(item.trim()) || item.trim())
+        .filter(Boolean);
+      updateCheckStatus(selectedCheck, "passed", {
+        type: "passed",
+        date: actionDate,
+        partyName: passedTo,
+        notes,
+        value: selectedCheck.amount,
+      }, { passedDate: actionDate, passedTo, relatedInvoices });
+      setFilter("passed");
     }
-    if (!window.confirm("Confirmar repasse deste cheque?")) return;
-    const passedDate = String(form.get("passedDate") || todayIso());
-    const relatedInvoices = String(form.get("relatedInvoices") || "")
-      .split(",")
-      .map((item) => normalizeNoteNumber(item.trim()) || item.trim())
-      .filter(Boolean);
-    updateCheckStatus(selectedCheck, "passed", {
-      type: "passed",
-      date: passedDate,
-      partyName: passedTo,
-      notes: String(form.get("passNotes") || ""),
-    }, { passedDate, passedTo, relatedInvoices });
-    setPassFormOpen(false);
-    setFilter("passed");
+
+    if (activeAction === "deposit") {
+      if (!window.confirm("Confirmar depósito deste cheque?")) return;
+      const holder = String(form.get("depositHolder") || "Itaú");
+      updateCheckStatus(selectedCheck, "deposited", {
+        type: "deposited",
+        date: actionDate,
+        partyName: holder,
+        notes,
+        value: selectedCheck.amount,
+      }, {
+        depositDate: actionDate,
+        depositHolder: holder,
+        depositAgency: String(form.get("depositAgency") || ""),
+        depositAccount: String(form.get("depositAccount") || ""),
+      });
+      setFilter("deposited");
+    }
+
+    if (activeAction === "compensate") {
+      if (!window.confirm("Confirmar compensação deste cheque?")) return;
+      const holder = String(form.get("compensationHolder") || selectedCheck.depositHolder || "Itaú");
+      updateCheckStatus(selectedCheck, "compensated", {
+        type: "compensated",
+        date: actionDate,
+        partyName: holder,
+        notes,
+        value: cleanNumber(form.get("compensationValue")) || selectedCheck.amount,
+      }, { compensationDate: actionDate, compensationHolder: holder });
+      setFilter("compensated");
+    }
+
+    if (activeAction === "return") {
+      if (!window.confirm("Confirmar cheque devolvido? Ele voltará para recebidos em vermelho.")) return;
+      updateCheckStatus(selectedCheck, "returned", {
+        type: "returned",
+        date: actionDate,
+        partyName: "Banco",
+        notes,
+        value: selectedCheck.amount,
+      }, {
+        returnedDate: actionDate,
+        returnedReason: notes,
+        passedDate: undefined,
+        passedTo: undefined,
+        depositDate: undefined,
+        depositHolder: undefined,
+      });
+      setFilter("received");
+    }
+
+    if (activeAction === "recover") {
+      const recoveredFrom = String(form.get("recoveredFrom") || selectedCheck.passedTo || selectedCheck.receivedFrom || "");
+      if (!window.confirm("Confirmar recuperação deste cheque? Ele voltará para posse da empresa.")) return;
+      updateCheckStatus(selectedCheck, "holding", {
+        type: "recovered",
+        date: actionDate,
+        partyName: recoveredFrom || "MSG Mineração",
+        notes,
+        value: selectedCheck.amount,
+      }, {
+        recoveredDate: actionDate,
+        recoveredFrom,
+        recoveryReason: notes,
+        passedDate: undefined,
+        passedTo: undefined,
+      });
+      setFilter("holding");
+    }
+
+    if (activeAction === "cancel") {
+      if (!window.confirm("Confirmar cancelamento deste cheque?")) return;
+      updateCheckStatus(selectedCheck, "canceled", {
+        type: "canceled",
+        date: actionDate,
+        partyName: "MSG Mineração",
+        notes,
+        value: selectedCheck.amount,
+      }, { canceledDate: actionDate, canceledReason: notes });
+      setFilter("canceled");
+    }
+
+    setActiveAction(null);
   };
 
   const timeline = selectedCheck?.movements?.length
-    ? selectedCheck.movements.filter((movement) => ["received", "holding", "passed"].includes(movement.type))
+    ? [...selectedCheck.movements].sort((a, b) => a.date.localeCompare(b.date))
     : [];
+  const selectedLinkedTotal = selectedCheck?.relatedInvoices?.length ? selectedCheck.amount : 0;
+  const selectedBalance = selectedCheck ? Math.max(selectedCheck.amount - selectedLinkedTotal, 0) : 0;
 
   return (
     <div className="view-stack checks-view">
-      <section className="stats-grid">
+      <section className="checks-stats-grid">
         <StatCard title="Total em cheques" value={formatCurrency(totalInChecks)} tone="info" />
-        <StatCard title="Recebidos pendentes" value={String(receivedChecks.length)} tone="danger" />
-        <StatCard title="Em posse" value={String(holdingChecks.length)} tone="good" />
-        <StatCard title="Repassados" value={String(passedChecks.length)} tone="warn" />
+        <StatCard title="Em posse" value={`${formatCurrency(sumChecks(holdingChecks))} | ${holdingChecks.length} cheques`} tone="good" />
+        <StatCard title="Repassados" value={`${formatCurrency(sumChecks(passedChecks))} | ${passedChecks.length} cheques`} tone="warn" />
+        <StatCard title="Depositados" value={`${formatCurrency(sumChecks(depositedChecks))} | ${depositedChecks.length} cheques`} tone="info" />
+        <StatCard title="Compensados" value={`${formatCurrency(sumChecks(compensatedChecks))} | ${compensatedChecks.length} cheques`} tone="good" />
+        <StatCard title="Devolvidos" value={`${formatCurrency(sumChecks(returnedChecks))} | ${returnedChecks.length} cheques`} tone="danger" />
+        <StatCard title="Vencendo em 7 dias" value={`${formatCurrency(sumChecks(dueSoonChecks))} | ${dueSoonChecks.length} cheques`} tone="warn" />
+        <StatCard title="Vencidos" value={`${formatCurrency(sumChecks(overdueChecks))} | ${overdueChecks.length} cheques`} tone="danger" />
       </section>
 
       <section className="panel">
@@ -3672,9 +3854,13 @@ function ChecksView({
           <ActionButton icon={Plus} onClick={startNew}>Novo cheque recebido</ActionButton>
         </div>
         <div className="check-tabs">
+          <button className={filter === "all" ? "active" : ""} type="button" onClick={() => setFilter("all")}>Todos</button>
           <button className={filter === "received" ? "active" : ""} type="button" onClick={() => setFilter("received")}>Recebidos</button>
           <button className={filter === "holding" ? "active" : ""} type="button" onClick={() => setFilter("holding")}>Em posse</button>
           <button className={filter === "passed" ? "active" : ""} type="button" onClick={() => setFilter("passed")}>Repassados</button>
+          <button className={filter === "deposited" ? "active" : ""} type="button" onClick={() => setFilter("deposited")}>Depositados</button>
+          <button className={filter === "compensated" ? "active" : ""} type="button" onClick={() => setFilter("compensated")}>Compensados</button>
+          <button className={filter === "canceled" ? "active" : ""} type="button" onClick={() => setFilter("canceled")}>Cancelados</button>
         </div>
       </section>
 
@@ -3711,27 +3897,48 @@ function ChecksView({
 
       <section className="checks-layout">
         <section className="panel checks-list-panel">
-          <h2>{filter === "received" ? "Cheques recebidos" : filter === "holding" ? "Cheques em posse" : "Cheques repassados"}</h2>
-          <div className="checks-list">
-            {filteredChecks.map((check) => (
-              <button
-                key={check.id}
-                type="button"
-                className={`check-card ${selectedCheck?.id === check.id ? "selected" : ""} ${check.status === "returned" ? "returned" : ""}`}
-                onClick={() => setSelectedId(check.id)}
-              >
-                <div>
-                  <strong>{formatCurrency(check.amount)}</strong>
-                  <span>{check.issuerName}</span>
-                  <small>Recebido em {formatDate(check.receivedDate)}</small>
-                </div>
-                <div>
-                  <Badge value={checkStatusLabel(check.status)} />
-                  <small>Pré-datado {formatDate(check.dueDate)}</small>
-                </div>
-              </button>
-            ))}
-            {!filteredChecks.length && <p className="muted">Nenhum cheque nessa situação.</p>}
+          <h2>Cheques</h2>
+          <div className="check-table-wrap">
+            <table className="static-table check-table">
+              <thead>
+                <tr>
+                  <th>N° Cheque</th>
+                  <th>Banco</th>
+                  <th>Emitente</th>
+                  <th>Valor</th>
+                  <th>Vencimento</th>
+                  <th>Portador atual</th>
+                  <th>Status</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredChecks.map((check) => (
+                  <tr key={check.id} className={check.status === "returned" ? "check-row-returned" : ""}>
+                    <td>{check.checkNumber}</td>
+                    <td>{check.bank || "-"}</td>
+                    <td>{check.issuerName}</td>
+                    <td className="money-positive">{formatCurrency(check.amount)}</td>
+                    <td>{formatDate(check.dueDate)}</td>
+                    <td>{check.passedTo || check.depositHolder || check.compensationHolder || "MSG Mineração"}</td>
+                    <td><Badge value={checkStatusLabel(check.status)} tone={checkStatusTone(check.status)} /></td>
+                    <td>
+                      <button className="icon-btn" type="button" title="Ver detalhes" onClick={() => setSelectedId(check.id)}>
+                        <Search size={15} />
+                      </button>
+                      <button className="icon-btn" type="button" title="Editar" onClick={() => editCheck(check)}>
+                        <Pencil size={15} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!filteredChecks.length && (
+                  <tr>
+                    <td colSpan={8}>Nenhum cheque nessa situação.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </section>
 
@@ -3743,13 +3950,14 @@ function ChecksView({
                   <h2>Detalhes do cheque</h2>
                   <p className="muted">Cheque N° {selectedCheck.checkNumber}</p>
                 </div>
-                <Badge value={checkStatusLabel(selectedCheck.status)} />
+                <Badge value={checkStatusLabel(selectedCheck.status)} tone={checkStatusTone(selectedCheck.status)} />
               </div>
               <div className={`check-value-box ${selectedCheck.status === "returned" ? "returned" : ""}`}>
                 <span>Valor do cheque</span>
                 <strong>{formatCurrency(selectedCheck.amount)}</strong>
               </div>
               <div className="detail-list">
+                <p><span>N° do cheque</span><strong>{selectedCheck.checkNumber}</strong></p>
                 <p><span>Emitente</span><strong>{selectedCheck.issuerName}</strong></p>
                 <p><span>CPF/CNPJ</span><strong>{selectedCheck.issuerDocument || "-"}</strong></p>
                 <p><span>Banco</span><strong>{selectedCheck.bank || "-"}</strong></p>
@@ -3757,48 +3965,114 @@ function ChecksView({
                 <p><span>Conta</span><strong>{selectedCheck.account || "-"}</strong></p>
                 <p><span>Pré-datado para</span><strong>{formatDate(selectedCheck.dueDate)}</strong></p>
                 <p><span>Recebido de</span><strong>{selectedCheck.receivedFrom}</strong></p>
-                <p><span>Notas relacionadas</span><strong>{selectedCheck.relatedInvoices.join(", ") || "-"}</strong></p>
                 <p><span>Observação</span><strong>{selectedCheck.notes || "-"}</strong></p>
+              </div>
+              <div className="check-linked-box">
+                <h3>Notas vinculadas</h3>
+                <table className="static-table compact-table">
+                  <thead>
+                    <tr>
+                      <th>Nota fiscal</th>
+                      <th>Valor vinculado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(selectedCheck.relatedInvoices || []).map((invoice) => (
+                      <tr key={invoice}>
+                        <td>{invoice}</td>
+                        <td>{formatCurrency(selectedCheck.amount / Math.max(selectedCheck.relatedInvoices.length, 1))}</td>
+                      </tr>
+                    ))}
+                    {!selectedCheck.relatedInvoices?.length && (
+                      <tr>
+                        <td colSpan={2}>Nenhuma nota vinculada.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <div className="check-linked-summary">
+                  <span>Total vinculado: {formatCurrency(selectedLinkedTotal)}</span>
+                  <span>Saldo não vinculado: {formatCurrency(selectedBalance)}</span>
+                </div>
               </div>
               <div className="check-history">
                 <h3>Histórico do cheque</h3>
                 {timeline.map((movement) => (
                   <div className="check-history-row" key={`${movement.type}-${movement.date}`}>
-                    <span className={movement.type}>{movement.type === "received" ? "Recebido" : movement.type === "holding" ? "Em posse" : "Repassado"}</span>
+                    <span className={movement.type}>{checkStatusLabel(movement.type === "recovered" ? "holding" : movement.type as CheckStatus)}</span>
                     <strong>{movement.partyName}</strong>
-                    <small>{formatDate(movement.date)} {movement.notes ? `- ${movement.notes}` : ""}</small>
+                    <small>{formatDate(movement.date)} {movement.value ? `- ${formatCurrency(movement.value)}` : ""} {movement.notes ? `- ${movement.notes}` : ""}</small>
                   </div>
                 ))}
-                {selectedCheck.status === "returned" && (
-                  <div className="check-history-row returned">
-                    <span>Devolvido</span>
-                    <strong>Banco</strong>
-                    <small>{selectedCheck.movements.find((movement) => movement.type === "returned")?.notes || "Cheque devolvido"}</small>
-                  </div>
-                )}
               </div>
-              {passFormOpen ? (
-                <form className="pass-check-form" onSubmit={passCheck}>
+              {activeAction ? (
+                <form className="pass-check-form" onSubmit={runCheckAction}>
+                  <div className="panel-title between">
+                    <h2>
+                      {activeAction === "pass" && "Repassar cheque"}
+                      {activeAction === "deposit" && "Depositar cheque"}
+                      {activeAction === "compensate" && "Confirmar compensação"}
+                      {activeAction === "return" && "Registrar devolução"}
+                      {activeAction === "recover" && "Recuperar cheque"}
+                      {activeAction === "cancel" && "Cancelar cheque"}
+                    </h2>
+                    <Badge value={checkStatusLabel(selectedCheck.status)} tone={checkStatusTone(selectedCheck.status)} />
+                  </div>
                   <div className="form-grid">
-                    <Field label="Repassar para" name="passedTo" defaultValue={selectedCheck.passedTo || ""} required />
-                    <Field label="Data do repasse" name="passedDate" type="date" defaultValue={selectedCheck.passedDate || todayIso()} required />
-                    <Field label="Referente às notas" name="relatedInvoices" defaultValue={selectedCheck.relatedInvoices.join(", ")} placeholder="Ex.: 5574, 5575" />
+                    {activeAction === "pass" && <Field label="Destinatário" name="passedTo" defaultValue={selectedCheck.passedTo || ""} required />}
+                    {activeAction === "pass" && <Field label="Referente às notas" name="relatedInvoices" defaultValue={selectedCheck.relatedInvoices.join(", ")} placeholder="Ex.: 5574, 5575" />}
+                    {activeAction === "deposit" && <Field label="Banco de depósito" name="depositHolder" options={configuredHolders()} defaultValue={selectedCheck.depositHolder || "Itaú"} />}
+                    {activeAction === "deposit" && <Field label="Agência" name="depositAgency" defaultValue={selectedCheck.depositAgency || ""} />}
+                    {activeAction === "deposit" && <Field label="Conta" name="depositAccount" defaultValue={selectedCheck.depositAccount || ""} />}
+                    {activeAction === "compensate" && <Field label="Conta de crédito" name="compensationHolder" options={configuredHolders()} defaultValue={selectedCheck.compensationHolder || selectedCheck.depositHolder || "Itaú"} />}
+                    {activeAction === "compensate" && <MoneyField label="Valor compensado" name="compensationValue" defaultValue={formatCurrency(selectedCheck.amount)} autoCalc />}
+                    {activeAction === "recover" && <Field label="Recuperado de" name="recoveredFrom" defaultValue={selectedCheck.passedTo || selectedCheck.receivedFrom || ""} />}
+                    <Field
+                      label={
+                        activeAction === "pass" ? "Data do repasse" :
+                        activeAction === "deposit" ? "Data do depósito" :
+                        activeAction === "compensate" ? "Data da compensação" :
+                        activeAction === "return" ? "Data da devolução" :
+                        activeAction === "recover" ? "Data da recuperação" :
+                        "Data do cancelamento"
+                      }
+                      name="actionDate"
+                      type="date"
+                      defaultValue={todayIso()}
+                      required
+                    />
                     <label className="field wide">
-                      <span>Observação do repasse</span>
-                      <textarea name="passNotes" defaultValue="" placeholder="Livre" />
+                      <span>
+                        {activeAction === "return" ? "Motivo da devolução" :
+                        activeAction === "cancel" ? "Motivo do cancelamento" :
+                        activeAction === "recover" ? "Motivo da recuperação" :
+                        "Observação"}
+                      </span>
+                      <textarea name="actionNotes" defaultValue="" placeholder="Livre" />
                     </label>
+                    {(activeAction === "return" || activeAction === "cancel" || activeAction === "recover") && (
+                      <div className="check-warning wide">
+                        {activeAction === "return" && "Após confirmar, o cheque voltará para recebidos em vermelho."}
+                        {activeAction === "recover" && "Após confirmar, o cheque voltará para posse da MSG Mineração."}
+                        {activeAction === "cancel" && "Cheque cancelado não deve ser utilizado em novas operações."}
+                      </div>
+                    )}
                   </div>
                   <div className="form-actions">
-                    <ActionButton icon={X} variant="ghost" onClick={() => setPassFormOpen(false)}>Cancelar</ActionButton>
-                    <ActionButton icon={Save} type="submit">Confirmar repasse</ActionButton>
+                    <ActionButton icon={X} variant="ghost" onClick={() => setActiveAction(null)}>Cancelar</ActionButton>
+                    <ActionButton icon={Save} type="submit">Confirmar</ActionButton>
                   </div>
                 </form>
               ) : (
                 <div className="check-actions">
                   <ActionButton icon={Pencil} variant="ghost" onClick={() => editCheck(selectedCheck)}>Editar</ActionButton>
-                  {selectedCheck.status !== "holding" && <ActionButton icon={CheckCircle2} onClick={() => markHolding(selectedCheck)}>Marcar em posse</ActionButton>}
-                  {selectedCheck.status === "holding" && <ActionButton icon={Plus} onClick={() => setPassFormOpen(true)}>Repassar cheque</ActionButton>}
-                  {selectedCheck.status !== "returned" && <ActionButton icon={AlertTriangle} variant="danger" onClick={() => markReturned(selectedCheck)}>Cheque devolvido</ActionButton>}
+                  {selectedCheck.status !== "holding" && selectedCheck.status !== "compensated" && selectedCheck.status !== "canceled" && <ActionButton icon={CheckCircle2} onClick={() => markHolding(selectedCheck)}>Marcar em posse</ActionButton>}
+                  {selectedCheck.status === "holding" && <ActionButton icon={Plus} onClick={() => setActiveAction("pass")}>Repassar</ActionButton>}
+                  {selectedCheck.status === "holding" && <ActionButton icon={Download} onClick={() => setActiveAction("deposit")}>Depositar</ActionButton>}
+                  {selectedCheck.status === "deposited" && <ActionButton icon={CheckCircle2} onClick={() => setActiveAction("compensate")}>Compensar</ActionButton>}
+                  {selectedCheck.status === "returned" && <ActionButton icon={RefreshCw} onClick={() => setActiveAction("recover")}>Recuperar</ActionButton>}
+                  {!["returned", "compensated", "canceled"].includes(selectedCheck.status) && <ActionButton icon={AlertTriangle} variant="danger" onClick={() => setActiveAction("return")}>Devolver</ActionButton>}
+                  {selectedCheck.status !== "canceled" && selectedCheck.status !== "compensated" && <ActionButton icon={X} variant="danger" onClick={() => setActiveAction("cancel")}>Cancelar</ActionButton>}
                   <button className="btn danger" type="button" onClick={() => window.confirm("Tem certeza que deseja excluir este cheque?") && onDelete(selectedCheck.id)}>
                     <X size={17} />
                     Excluir
@@ -5506,9 +5780,12 @@ export default function App() {
   const [registrationKind, setRegistrationKind] = useState<Party["kind"] | undefined>();
   const store = useFiscalStore();
 
-  const title = useMemo(() => views.find((item) => item.id === view)?.label || "Dashboard", [view]);
+  const title = useMemo(() => viewTitles.find((item) => item.id === view)?.label || "Dashboard", [view]);
   const canEdit = true;
   const bankBalanceValue = useMemo(() => fiscalConfig.bankBalance || 0, [configVersion]);
+  const [financeMenuOpen, setFinanceMenuOpen] = useState(true);
+  const [notesMenuOpen, setNotesMenuOpen] = useState(true);
+  const [fiscalMenuOpen, setFiscalMenuOpen] = useState(true);
 
   useEffect(() => {
     if (!supabase) return;
@@ -5737,23 +6014,122 @@ export default function App() {
           </div>
         </div>
         <nav>
-          {views
-            .filter(({ id }) => canEdit || (id !== "new-issued" && id !== "new-received"))
-            .map(({ id, label, icon: Icon }) => (
+          <button className={view === "dashboard" ? "active" : ""} onClick={() => { setView("dashboard"); setSidebarOpen(false); }}>
+            <Gauge size={18} />
+            Dashboard
+          </button>
+          <div className="nav-group">
             <button
-              key={id}
-              className={view === id ? "active" : ""}
-              onClick={() => {
-                if (id === "new-issued" || id === "new-received") setEditingInvoice(null);
-                if (id === "registrations") setRegistrationKind(undefined);
-                setView(id);
-                setSidebarOpen(false);
-              }}
+              className={financialViewIds.has(view) ? "active" : ""}
+              onClick={() => setFinanceMenuOpen((current) => !current)}
             >
-              <Icon size={18} />
-              {label}
+              <Database size={18} />
+              Financeiro
+              <ChevronDown className={financeMenuOpen ? "nav-chevron open" : "nav-chevron"} size={16} />
             </button>
-          ))}
+            {financeMenuOpen && (
+              <div className="nav-submenu">
+                {financialViews.map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
+                  <button
+                    key={childId}
+                    className={view === childId ? "active" : ""}
+                    onClick={() => {
+                      setView(childId);
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <ChildIcon size={15} />
+                    {childLabel}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button className={view === "dre" ? "active" : ""} onClick={() => { setView("dre"); setSidebarOpen(false); }}>
+            <BarChart3 size={18} />
+            DRE
+          </button>
+          <button className={view === "assets" ? "active" : ""} onClick={() => { setView("assets"); setSidebarOpen(false); }}>
+            <Building2 size={18} />
+            Patrimônio
+          </button>
+          <div className="nav-group">
+            <button
+              className={noteViewIds.has(view) ? "active" : ""}
+              onClick={() => setNotesMenuOpen((current) => !current)}
+            >
+              <Files size={18} />
+              Notas
+              <ChevronDown className={notesMenuOpen ? "nav-chevron open" : "nav-chevron"} size={16} />
+            </button>
+            {notesMenuOpen && (
+              <div className="nav-submenu">
+                {noteViews
+                  .filter(({ id }) => canEdit || (id !== "new-issued" && id !== "new-received"))
+                  .map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
+                    <button
+                      key={childId}
+                      className={view === childId ? "active" : ""}
+                      onClick={() => {
+                        if (childId === "new-issued" || childId === "new-received") setEditingInvoice(null);
+                        setView(childId);
+                        setSidebarOpen(false);
+                      }}
+                    >
+                      <ChildIcon size={15} />
+                      {childLabel}
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
+          <div className="nav-group">
+            <button
+              className={fiscalViewIds.has(view) ? "active" : ""}
+              onClick={() => setFiscalMenuOpen((current) => !current)}
+            >
+              <ClipboardList size={18} />
+              Fiscal
+              <ChevronDown className={fiscalMenuOpen ? "nav-chevron open" : "nav-chevron"} size={16} />
+            </button>
+            {fiscalMenuOpen && (
+              <div className="nav-submenu">
+                {fiscalViews.map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
+                  <button
+                    key={childId}
+                    className={view === childId ? "active" : ""}
+                    onClick={() => {
+                      setView(childId);
+                      setSidebarOpen(false);
+                    }}
+                  >
+                    <ChildIcon size={15} />
+                    {childLabel}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button className={view === "closures" ? "active" : ""} onClick={() => { setView("closures"); setSidebarOpen(false); }}>
+            <Lock size={18} />
+            Fechamentos
+          </button>
+          <button className={view === "registrations" ? "active" : ""} onClick={() => { setRegistrationKind(undefined); setView("registrations"); setSidebarOpen(false); }}>
+            <Building2 size={18} />
+            Cadastros
+          </button>
+          <button className={view === "products" ? "active" : ""} onClick={() => { setView("products"); setSidebarOpen(false); }}>
+            <PackagePlus size={18} />
+            Produtos
+          </button>
+          <button className={view === "settings" ? "active" : ""} onClick={() => { setView("settings"); setSidebarOpen(false); }}>
+            <Settings size={18} />
+            Configurações
+          </button>
+          <button className={view === "backup" ? "active" : ""} onClick={() => { setView("backup"); setSidebarOpen(false); }}>
+            <Database size={18} />
+            Backup
+          </button>
           <button onClick={async () => {
             if (supabase) await supabase.auth.signOut();
             setLogged(false);
@@ -5851,7 +6227,7 @@ export default function App() {
           {view === "conference" && <ConferenceView invoices={store.invoices} onOpen={openInvoiceForm} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
           {view === "closures" && <ClosuresView invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
-          {view === "financial" && (
+          {view === "financial-receivable" && (
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
@@ -5859,9 +6235,21 @@ export default function App() {
               onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
+              fixedType="receivable"
             />
           )}
-          {view === "financial-pf" && (
+          {view === "financial-payable" && (
+            <FinancialView
+              invoices={store.invoices}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOpenInvoice={openInvoiceForm}
+              bankBalanceValue={bankBalanceValue}
+              onBankBalanceSave={saveBankBalance}
+              fixedType="payable"
+            />
+          )}
+          {view === "financial-pf-receivable" && (
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
@@ -5870,6 +6258,19 @@ export default function App() {
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
               mode="pf"
+              fixedType="receivable"
+            />
+          )}
+          {view === "financial-pf-payable" && (
+            <FinancialView
+              invoices={store.invoices}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOpenInvoice={openInvoiceForm}
+              bankBalanceValue={bankBalanceValue}
+              onBankBalanceSave={saveBankBalance}
+              mode="pf"
+              fixedType="payable"
             />
           )}
           {view === "checks" && <ChecksView checks={store.checks} onSave={store.saveCheck} onDelete={store.deleteCheck} />}

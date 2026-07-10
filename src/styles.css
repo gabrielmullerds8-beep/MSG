@@ -210,6 +210,34 @@ button {
   color: #fff;
 }
 
+.nav-group {
+  display: grid;
+  gap: 5px;
+}
+
+.nav-chevron {
+  margin-left: auto;
+  transition: transform 0.18s ease;
+}
+
+.nav-chevron.open {
+  transform: rotate(180deg);
+}
+
+.nav-submenu {
+  display: grid;
+  gap: 4px;
+  margin-left: 18px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.sidebar nav .nav-submenu button {
+  min-height: 34px;
+  font-size: 13px;
+  padding-left: 10px;
+}
+
 .main {
   flex: 1;
   min-width: 0;
@@ -703,6 +731,12 @@ button {
   gap: 18px;
 }
 
+.single-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
 .tax-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -784,6 +818,12 @@ button {
   grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr));
 }
 
+.checks-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .check-tabs {
   display: inline-flex;
   flex-wrap: wrap;
@@ -809,7 +849,7 @@ button {
 
 .checks-layout {
   display: grid;
-  grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.25fr);
+  grid-template-columns: minmax(720px, 1.25fr) minmax(460px, 0.85fr);
   gap: 16px;
   align-items: start;
 }
@@ -825,6 +865,26 @@ button {
   max-height: 480px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.check-table-wrap {
+  max-height: 520px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.check-table {
+  min-width: 1040px;
+}
+
+.check-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.check-row-returned {
+  background: #fff1f2;
 }
 
 .check-card {
@@ -972,6 +1032,21 @@ button {
   color: #9a3412;
 }
 
+.check-history-row span.deposited {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.check-history-row span.compensated {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.check-history-row span.canceled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
 .check-history-row.returned span {
   background: #fee2e2;
   color: #991b1b;
@@ -991,6 +1066,46 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+}
+
+.check-linked-box {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px;
+}
+
+.check-linked-box h3 {
+  margin: 0;
+}
+
+.check-linked-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: flex-end;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.compact-table {
+  min-width: 0;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 8px 10px;
+}
+
+.check-warning {
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-weight: 800;
+  padding: 12px;
 }
 
 table {
@@ -1039,6 +1154,11 @@ tr:last-child td {
 .badge.warn {
   color: #9a3412;
   background: #ffedd5;
+}
+
+.badge.info {
+  color: #1d4ed8;
+  background: #dbeafe;
 }
 
 .badge.danger {
@@ -1295,11 +1415,6 @@ tr:last-child td {
   white-space: nowrap;
 }
 
-.financial-table td:nth-child(5) {
-  white-space: normal;
-  min-width: 220px;
-}
-
 .finance-row-payable {
   background: #fff1f2;
 }
@@ -1437,7 +1552,7 @@ tr:last-child td {
 
 .financial-table th:nth-child(1),
 .financial-table td:nth-child(1) {
-  width: 24%;
+  width: 14%;
 }
 
 .financial-table th:nth-child(2),
@@ -1446,16 +1561,18 @@ tr:last-child td {
 .financial-table td:nth-child(3),
 .financial-table th:nth-child(4),
 .financial-table td:nth-child(4),
-.financial-table th:nth-child(6),
-.financial-table td:nth-child(6) {
-  width: 11%;
+.financial-table th:nth-child(5),
+.financial-table td:nth-child(5) {
+  width: 14%;
 }
 
-.financial-table th:nth-child(5),
-.financial-table td:nth-child(5),
+.financial-table th:nth-child(6),
+.financial-table td:nth-child(6),
 .financial-table th:nth-child(7),
-.financial-table td:nth-child(7) {
-  width: 16%;
+.financial-table td:nth-child(7),
+.financial-table th:nth-child(8),
+.financial-table td:nth-child(8) {
+  width: 10%;
 }
 
 .cash-toolbar {
@@ -2086,6 +2203,7 @@ tr:last-child td {
 
 @media (max-width: 1180px) {
   .stats-grid,
+  .checks-stats-grid,
   .tax-summary-grid,
   .detail-grid,
   .asset-card-grid,
@@ -2191,6 +2309,7 @@ tr:last-child td {
   }
 
   .stats-grid,
+  .checks-stats-grid,
   .tax-summary-grid,
   .detail-grid,
   .asset-card-grid,

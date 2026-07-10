@@ -227,13 +227,42 @@ create table if not exists public.checks (
   received_from text,
   passed_date date,
   passed_to text,
+  deposit_date date,
+  deposit_holder text,
+  deposit_agency text,
+  deposit_account text,
+  compensation_date date,
+  compensation_holder text,
+  returned_date date,
+  returned_reason text,
+  recovered_date date,
+  recovered_from text,
+  recovery_reason text,
+  canceled_date date,
+  canceled_reason text,
   related_invoices jsonb not null default '[]'::jsonb,
   notes text,
-  status text not null default 'received' check (status in ('received', 'holding', 'passed', 'returned')),
+  status text not null default 'received' check (status in ('received', 'holding', 'passed', 'deposited', 'compensated', 'returned', 'canceled')),
   movements jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.checks add column if not exists deposit_date date;
+alter table public.checks add column if not exists deposit_holder text;
+alter table public.checks add column if not exists deposit_agency text;
+alter table public.checks add column if not exists deposit_account text;
+alter table public.checks add column if not exists compensation_date date;
+alter table public.checks add column if not exists compensation_holder text;
+alter table public.checks add column if not exists returned_date date;
+alter table public.checks add column if not exists returned_reason text;
+alter table public.checks add column if not exists recovered_date date;
+alter table public.checks add column if not exists recovered_from text;
+alter table public.checks add column if not exists recovery_reason text;
+alter table public.checks add column if not exists canceled_date date;
+alter table public.checks add column if not exists canceled_reason text;
+alter table public.checks drop constraint if exists checks_status_check;
+alter table public.checks add constraint checks_status_check check (status in ('received', 'holding', 'passed', 'deposited', 'compensated', 'returned', 'canceled'));
 
 drop table if exists public.allowed_users cascade;
 
