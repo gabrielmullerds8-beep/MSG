@@ -17,6 +17,7 @@ export const fiscalConfig: FiscalConfig = {
   cofinsRate: 7.6,
   cfemRate: 2,
   bankBalance: 0,
+  closedPeriods: {},
   cfops: [
     "5101 - Venda de produção do estabelecimento",
     "5119 - Venda a ordem",
@@ -75,6 +76,7 @@ export const fiscalConfig: FiscalConfig = {
     "Remessa por conta e ordem",
     "Remessa simbólica",
     "Entrega futura",
+    "Vinculação CTE",
     "Retorno",
     "Devolução",
     "Industrialização",

@@ -1,4 +1,4 @@
-﻿import { FormEvent, useEffect, useMemo, useState } from "react";
+﻿import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Archive,
@@ -67,6 +67,7 @@ type View =
   | "new-received"
   | "linked"
   | "search"
+  | "conference"
   | "tax"
   | "financial"
   | "bills"
@@ -87,6 +88,7 @@ const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
   { id: "linked", label: "Operações Vinculadas", icon: Link2 },
   { id: "search", label: "Consulta Fiscal", icon: FileSearch },
+  { id: "conference", label: "Conferência", icon: AlertTriangle },
   { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
   { id: "financial", label: "Financeira", icon: Database },
   { id: "bills", label: "Faturas", icon: Files },
@@ -109,6 +111,7 @@ type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" |
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
+  closedPeriods: { ...(fiscalConfig.closedPeriods || {}) },
   cfops: [...fiscalConfig.cfops],
   cfopRules: { ...(fiscalConfig.cfopRules || {}) },
   csts: [...fiscalConfig.csts],
@@ -126,6 +129,7 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
   fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
   fiscalConfig.bankBalance = Number(nextConfig.bankBalance ?? fiscalConfig.bankBalance ?? 0);
+  fiscalConfig.closedPeriods = nextConfig.closedPeriods ? { ...nextConfig.closedPeriods } : { ...(fiscalConfig.closedPeriods || {}) };
   fiscalConfig.cfops = mergeList(fiscalConfig.cfops, nextConfig.cfops);
   fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}), ...(nextConfig.cfopRules || {}) };
   fiscalConfig.csts = mergeList(fiscalConfig.csts, nextConfig.csts);
@@ -228,6 +232,12 @@ function OnlineVersionGuard() {
 
 const onlyDigits = (value?: string | number) => String(value ?? "").replace(/\D/g, "");
 
+const normalizeNoteNumber = (value?: string | number) => {
+  const digits = onlyDigits(value);
+  if (!digits) return "";
+  return digits.replace(/^0+/, "") || "0";
+};
+
 const cleanNumber = (value: FormDataEntryValue | null) => {
   const raw = String(value || "0").trim();
   if (!raw) return 0;
@@ -240,6 +250,12 @@ const cleanNumber = (value: FormDataEntryValue | null) => {
   }
 
   return Number(normalized) || 0;
+};
+
+const chartValue = (value: number) => (Number.isFinite(value) ? Math.max(value, 0) : 0);
+const chartLabel = (value: string, max = 26) => {
+  const text = String(value || "Sem dados").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 };
 
 const digitsOnly = (value: string) => value.replace(/\D/g, "");
@@ -358,6 +374,33 @@ const invoiceProductEntries = (invoice: Invoice) => {
 };
 
 const invoiceDate = (invoice: Invoice) => (invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate);
+const invoicePeriodKey = (invoice: Invoice) => invoiceDate(invoice)?.slice(0, 7) || "";
+const operationPeriodKey = (operation: LinkedOperation) => operation.operationDate?.slice(0, 7) || "";
+const periodLabel = (period: string) => {
+  const [year, month] = period.split("-");
+  if (!year || !month) return period;
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(date);
+};
+const isPeriodClosed = (period: string) => Boolean(period && fiscalConfig.closedPeriods?.[period]);
+const hasInvoiceCostCenter = (invoice: Invoice) =>
+  Boolean(invoice.costCenter || invoice.items?.some((item) => item.costCenter));
+const cfopIsConfigured = (invoice: Invoice) => {
+  const code = getCfopCode(invoice.mainCfop);
+  return Boolean(code && (fiscalConfig.cfopRules?.[code] || fiscalConfig.cfops.some((cfop) => getCfopCode(cfop) === code)));
+};
+const invoiceNeedsLink = (invoice: Invoice) => {
+  const cfop = getCfopCode(invoice.mainCfop);
+  const linkedType = invoice.linkedOperationType || invoice.operationType || "";
+  return (
+    ["5119", "5923", "1353"].includes(cfop) ||
+    invoice.natureOperation === "CT-e" ||
+    /triangula|ordem|vincula|cte|frete/i.test(linkedType)
+  );
+};
+const invoiceHasLinkReference = (invoice: Invoice) =>
+  Boolean(invoice.linkedInvoiceNumber || invoice.hasLinkedOperation || invoice.finalRecipientName || invoice.physicalReceiverName);
+const invoiceHasHolder = (invoice: Invoice) => invoiceInstallments(invoice).every((installment) => Boolean(installment.holder));
 const isBillInvoice = (invoice: Invoice) => invoice.natureOperation === "Fatura" || invoice.natureOperation === "Recibo";
 const billFinancialKind = (invoice: Invoice): "receivable" | "payable" | null => {
   if (!isBillInvoice(invoice)) return null;
@@ -475,37 +518,43 @@ const operationSearchText = (op: LinkedOperation) =>
   ].join(" ");
 
 const operationIdFromInvoices = (mainInvoiceNumber: string, linkedInvoiceNumber: string) => {
-  const main = onlyDigits(mainInvoiceNumber).replace(/^0+/, "");
-  const linked = onlyDigits(linkedInvoiceNumber).replace(/^0+/, "");
+  const main = normalizeNoteNumber(mainInvoiceNumber);
+  const linked = normalizeNoteNumber(linkedInvoiceNumber);
   return main && linked ? `op_${main}_${linked}` : newId("op");
 };
 
-function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainCfop: string): InvoiceItem {
+function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainCfop: string, noteTaxBaseOverride?: number): InvoiceItem {
   const suffix = `_${index}`;
   const quantity = cleanNumber(form.get(`quantity${suffix}`));
   const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
   const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
   const freightValue = cleanNumber(form.get(`itemFreightValue${suffix}`));
-  const icmsRate = cleanNumber(form.get(`icmsRate${suffix}`));
-  const icmsBase = cleanNumber(form.get(`icmsBase${suffix}`)) || totalValue;
-  const icmsValue = cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100;
-  const pisCofinsBase = cleanNumber(form.get(`pisCofinsBase${suffix}`)) || totalValue;
-  const pisBase = pisCofinsBase;
-  const pisRate = cleanNumber(form.get(`pisRate${suffix}`));
-  const pisValue = cleanNumber(form.get(`pisValue${suffix}`)) || (pisBase * pisRate) / 100;
-  const cofinsBase = pisCofinsBase;
-  const cofinsRate = cleanNumber(form.get(`cofinsRate${suffix}`));
-  const cofinsValue = cleanNumber(form.get(`cofinsValue${suffix}`)) || (cofinsBase * cofinsRate) / 100;
-  const ipiRate = cleanNumber(form.get(`ipiRate${suffix}`));
-  const ipiBase = cleanNumber(form.get(`ipiBase${suffix}`)) || totalValue;
-  const ipiValue = cleanNumber(form.get(`ipiValue${suffix}`)) || (ipiBase * ipiRate) / 100;
-  const ibsRate = cleanNumber(form.get(`ibsRate${suffix}`));
-  const ibsBase = cleanNumber(form.get(`ibsBase${suffix}`)) || totalValue;
-  const ibsValue = cleanNumber(form.get(`ibsValue${suffix}`)) || (ibsBase * ibsRate) / 100;
-  const cbsRate = cleanNumber(form.get(`cbsRate${suffix}`));
-  const cbsBase = cleanNumber(form.get(`cbsBase${suffix}`)) || totalValue;
-  const cbsValue = cleanNumber(form.get(`cbsValue${suffix}`)) || (cbsBase * cbsRate) / 100;
+  const taxBase = noteTaxBaseOverride !== undefined ? noteTaxBaseOverride : cleanNumber(form.get(`taxBase${suffix}`)) || totalValue;
+  const icmsEnabled = form.get(`icmsEnabled${suffix}`) === "on";
+  const pisEnabled = form.get(`pisEnabled${suffix}`) === "on";
+  const cofinsEnabled = form.get(`cofinsEnabled${suffix}`) === "on";
+  const ipiEnabled = form.get(`ipiEnabled${suffix}`) === "on";
+  const ibsEnabled = form.get(`ibsEnabled${suffix}`) === "on";
+  const cbsEnabled = form.get(`cbsEnabled${suffix}`) === "on";
+  const icmsRate = icmsEnabled ? cleanNumber(form.get(`icmsRate${suffix}`)) : 0;
+  const icmsBase = icmsEnabled ? taxBase : 0;
+  const icmsValue = icmsEnabled ? cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100 : 0;
+  const pisBase = pisEnabled ? taxBase : 0;
+  const pisRate = pisEnabled ? cleanNumber(form.get(`pisRate${suffix}`)) : 0;
+  const pisValue = pisEnabled ? cleanNumber(form.get(`pisValue${suffix}`)) || (pisBase * pisRate) / 100 : 0;
+  const cofinsBase = cofinsEnabled ? taxBase : 0;
+  const cofinsRate = cofinsEnabled ? cleanNumber(form.get(`cofinsRate${suffix}`)) : 0;
+  const cofinsValue = cofinsEnabled ? cleanNumber(form.get(`cofinsValue${suffix}`)) || (cofinsBase * cofinsRate) / 100 : 0;
+  const ipiRate = ipiEnabled ? cleanNumber(form.get(`ipiRate${suffix}`)) : 0;
+  const ipiBase = ipiEnabled ? taxBase : 0;
+  const ipiValue = ipiEnabled ? cleanNumber(form.get(`ipiValue${suffix}`)) || (ipiBase * ipiRate) / 100 : 0;
+  const ibsRate = ibsEnabled ? cleanNumber(form.get(`ibsRate${suffix}`)) : 0;
+  const ibsBase = ibsEnabled ? taxBase : 0;
+  const ibsValue = ibsEnabled ? cleanNumber(form.get(`ibsValue${suffix}`)) || (ibsBase * ibsRate) / 100 : 0;
+  const cbsRate = cbsEnabled ? cleanNumber(form.get(`cbsRate${suffix}`)) : 0;
+  const cbsBase = cbsEnabled ? taxBase : 0;
+  const cbsValue = cbsEnabled ? cleanNumber(form.get(`cbsValue${suffix}`)) || (cbsBase * cbsRate) / 100 : 0;
   const cfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
 
   return {
@@ -515,7 +564,7 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     description: String(form.get(`description${suffix}`) || ""),
     category: String(form.get(`category${suffix}`) || ""),
     costCenter: String(form.get(`costCenter${suffix}`) || ""),
-    accountingAccount: String(form.get(`accountingAccount${suffix}`) || ""),
+    accountingAccount: "",
     productColor: String(form.get(`productColor${suffix}`) || ""),
     ncm: String(form.get(`ncm${suffix}`) || ""),
     cfop: mainCfop,
@@ -529,15 +578,15 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     icmsBase,
     icmsRate,
     icmsValue,
-    icmsCreditable: invoiceType === "received" && form.get(`icmsCreditable${suffix}`) === "on",
+    icmsCreditable: invoiceType === "received" && icmsEnabled && form.get(`icmsCreditable${suffix}`) === "on",
     pisBase,
     pisRate,
     pisValue,
-    pisCreditable: invoiceType === "received" && form.get(`pisCreditable${suffix}`) === "on",
+    pisCreditable: invoiceType === "received" && pisEnabled && form.get(`pisCreditable${suffix}`) === "on",
     cofinsBase,
     cofinsRate,
     cofinsValue,
-    cofinsCreditable: invoiceType === "received" && form.get(`cofinsCreditable${suffix}`) === "on",
+    cofinsCreditable: invoiceType === "received" && cofinsEnabled && form.get(`cofinsCreditable${suffix}`) === "on",
     ipiBase,
     ipiRate,
     ipiValue,
@@ -581,6 +630,96 @@ function StatCard({
     <article className={`stat ${tone}`}>
       <span>{title}</span>
       <strong>{value}</strong>
+    </article>
+  );
+}
+
+type TaxBreakdownRow = {
+  invoiceNumber: string;
+  issueDate: string;
+  partyName: string;
+  amount: number;
+};
+
+function TaxBreakdownPopover({
+  title,
+  rows,
+  onClose,
+}: {
+  title: string;
+  rows: TaxBreakdownRow[];
+  onClose: () => void;
+}) {
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return (
+    <div className="tax-popover" role="dialog" aria-label={`Composição de ${title}`}>
+      <div className="popover-title">
+        <strong>{title}</strong>
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Fechar detalhamento">
+          <X size={15} />
+        </button>
+      </div>
+      <div className="tax-popover-table">
+        <table className="static-table compact-table">
+          <thead>
+            <tr>
+              <th>N° nota</th>
+              <th>Emissão</th>
+              <th>Cliente/fornecedor</th>
+              <th>Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              rows.map((row, index) => (
+                <tr key={`${row.invoiceNumber}-${row.issueDate}-${index}`}>
+                  <td>{row.invoiceNumber || "-"}</td>
+                  <td>{formatDate(row.issueDate)}</td>
+                  <td>{row.partyName || "-"}</td>
+                  <td>{formatCurrency(row.amount)}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={4}>Nenhum lançamento compondo este valor.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="popover-total">
+        <span>Total</span>
+        <strong>{formatCurrency(total)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function TaxStatCard({
+  title,
+  value,
+  tone = "default",
+  rows,
+  isOpen,
+  onToggle,
+  onClose,
+}: {
+  title: string;
+  value: number;
+  tone?: "default" | "good" | "warn" | "danger" | "info";
+  rows: TaxBreakdownRow[];
+  isOpen: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <article className={`stat ${tone} tax-click-card`}>
+      <button type="button" className="tax-card-button" onClick={onToggle} title="Ver composição do valor">
+        <span>{title}</span>
+        <strong>{formatCurrency(value)}</strong>
+      </button>
+      {isOpen && <TaxBreakdownPopover title={title} rows={rows} onClose={onClose} />}
     </article>
   );
 }
@@ -702,6 +841,59 @@ function PercentField({ label, name, defaultValue = "0,00 %" }: { label: string;
         }}
       />
     </label>
+  );
+}
+
+function TaxControl({
+  title,
+  enabledName,
+  defaultChecked,
+  baseName,
+  baseValue,
+  rateName,
+  rateValue,
+  valueName,
+  valueValue,
+  creditName,
+  creditDefault,
+  showCredit,
+}: {
+  title: string;
+  enabledName: string;
+  defaultChecked: boolean;
+  baseName: string;
+  baseValue: string;
+  rateName: string;
+  rateValue: string | number;
+  valueName: string;
+  valueValue: string;
+  creditName?: string;
+  creditDefault?: boolean;
+  showCredit?: boolean;
+}) {
+  return (
+    <div className="tax-control-row">
+      <label className="tax-toggle">
+        <input
+          name={enabledName}
+          type="checkbox"
+          defaultChecked={defaultChecked}
+          onChange={(event) => event.currentTarget.form?.dispatchEvent(new Event("input", { bubbles: true }))}
+        />
+        <span>{title}</span>
+      </label>
+      <div className="tax-fields">
+        <MoneyField label={`Base ${title}`} name={baseName} defaultValue={baseValue} autoCalc />
+        <PercentField label={`Alíquota ${title} %`} name={rateName} defaultValue={rateValue} />
+        <MoneyField label={`Valor ${title}`} name={valueName} defaultValue={valueValue} autoCalc />
+        {showCredit && creditName && (
+          <label className="check tax-credit">
+            <input name={creditName} type="checkbox" defaultChecked={creditDefault} />
+            {title} creditável
+          </label>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -910,36 +1102,59 @@ function Dashboard({
   totals: ReturnType<typeof useFiscalStore>["totals"];
   onView: (view: View) => void;
 }) {
+  const [chartBreakdown, setChartBreakdown] = useState<{ title: string; rows: TaxBreakdownRow[] } | null>(null);
+  const issuedSales = totals.issued.filter(invoiceConsidersSale);
+  const invoiceBreakdownRow = (invoice: Invoice, amount: number): TaxBreakdownRow => ({
+    invoiceNumber: normalizeNoteNumber(invoice.invoiceNumber),
+    issueDate: invoice.issueDate,
+    partyName: invoice.partyName,
+    amount,
+  });
+  const customerRows = issuedSales.reduce<Record<string, TaxBreakdownRow[]>>((acc, invoice) => {
+    const name = invoice.partyName || "Cliente sem nome";
+    acc[name] ||= [];
+    acc[name].push(invoiceBreakdownRow(invoice, invoiceFinancialAmount(invoice)));
+    return acc;
+  }, {});
+  const productRows = issuedSales.reduce<Record<string, TaxBreakdownRow[]>>((acc, invoice) => {
+    invoiceProductEntries(invoice).forEach((product) => {
+      const name = product.name || "Produto sem descrição";
+      acc[name] ||= [];
+      acc[name].push(invoiceBreakdownRow(invoice, product.value));
+    });
+    return acc;
+  }, {});
   const byCustomer = Object.values(
-    totals.issued
-      .filter(invoiceConsidersSale)
+    issuedSales
       .reduce<Record<string, { name: string; value: number }>>((acc, invoice) => {
-        acc[invoice.partyName] ||= { name: invoice.partyName, value: 0 };
-        acc[invoice.partyName].value += invoiceFinancialAmount(invoice);
+        const name = invoice.partyName || "Cliente sem nome";
+        acc[name] ||= { name, value: 0 };
+        acc[name].value += chartValue(invoiceFinancialAmount(invoice));
         return acc;
       }, {}),
-  );
+  ).map((item) => ({ ...item, label: chartLabel(item.name) }));
   const byProduct = Object.values(
-    totals.issued
-      .filter(invoiceConsidersSale)
+    issuedSales
       .flatMap(invoiceProductEntries)
       .reduce<Record<string, { name: string; value: number }>>((acc, product) => {
-        const key = product.name;
+        const key = product.name || "Produto sem descrição";
         acc[key] ||= { name: key, value: 0 };
-        acc[key].value += product.value;
+        acc[key].value += chartValue(product.value);
         return acc;
       }, {}),
-  );
+  ).map((item) => ({ ...item, label: chartLabel(item.name, 22) }));
   const monthly = Object.values(
-    totals.issued
-      .filter(invoiceConsidersSale)
+    issuedSales
       .reduce<Record<string, { month: string; faturamento: number }>>((acc, invoice) => {
         const key = invoice.issueDate.slice(0, 7);
         acc[key] ||= { month: `${key.slice(5, 7)}/${key.slice(0, 4)}`, faturamento: 0 };
-        acc[key].faturamento += invoiceFinancialAmount(invoice);
+        acc[key].faturamento += chartValue(invoiceFinancialAmount(invoice));
         return acc;
       }, {}),
   );
+  const customerChart = byCustomer.length ? byCustomer : [{ name: "Sem dados", label: "Sem dados", value: 0 }];
+  const productChart = byProduct.length ? byProduct : [{ name: "Sem dados", label: "Sem dados", value: 0 }];
+  const monthlyChart = monthly.length ? monthly : [{ month: "Sem dados", faturamento: 0 }];
 
   const alerts = [
     `${totals.received.filter((invoice) => !invoice.costCenter).length} notas recebidas sem centro de custo`,
@@ -960,40 +1175,62 @@ function Dashboard({
       </div>
 
       <section className="stats-grid">
+        <StatCard title="Notas emitidas" value={String(totals.issuedCount)} tone="good" />
         <StatCard title="Faturamento bruto" value={formatCurrency(totals.revenue)} tone="good" />
+        <StatCard title="Notas recebidas" value={String(totals.receivedCount)} tone="danger" />
         <StatCard title="Compras brutas" value={formatCurrency(totals.purchases)} tone="danger" />
-        <StatCard title="Notas emitidas" value={String(totals.issuedCount)} tone="info" />
-        <StatCard title="Notas recebidas" value={String(totals.receivedCount)} tone="good" />
-        <StatCard title="CFEM a recolher" value={formatCurrency(totals.cfemDue)} tone="warn" />
-        <StatCard title="Operações Vinculadas" value={String(totals.linkedCount)} tone="warn" />
       </section>
 
       <section className="chart-grid">
-        <ChartCard title="Faturamento por cliente">
+        <ChartCard title="Faturamento por cliente" interactive>
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={byCustomer}>
+            <BarChart data={customerChart}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" hide />
               <YAxis />
               <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-              <Bar dataKey="value" fill="#2563eb" radius={[4, 4, 0, 0]} />
+              <Bar
+                dataKey="value"
+                fill="#2563eb"
+                radius={[4, 4, 0, 0]}
+                onClick={(data: unknown) => {
+                  const name = (data as { payload?: { name?: string } }).payload?.name;
+                  if (!name || name === "Sem dados") return;
+                  setChartBreakdown({ title: `Faturamento por cliente: ${name}`, rows: customerRows[name] || [] });
+                }}
+              />
             </BarChart>
           </ResponsiveContainer>
+          {chartBreakdown?.title.startsWith("Faturamento por cliente") && (
+            <ChartBreakdownPanel title={chartBreakdown.title} rows={chartBreakdown.rows} onClose={() => setChartBreakdown(null)} />
+          )}
         </ChartCard>
-        <ChartCard title="Faturamento por produto">
+        <ChartCard title="Faturamento por produto" interactive>
           <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={byProduct} layout="vertical" margin={{ left: 24, right: 18 }}>
+            <BarChart data={productChart} layout="vertical" margin={{ left: 24, right: 18 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis type="number" />
-              <YAxis type="category" dataKey="name" width={132} />
+              <YAxis type="category" dataKey="label" width={142} />
               <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-              <Bar dataKey="value" fill="#f97316" radius={[0, 4, 4, 0]} />
+              <Bar
+                dataKey="value"
+                fill="#f97316"
+                radius={[0, 4, 4, 0]}
+                onClick={(data: unknown) => {
+                  const name = (data as { payload?: { name?: string } }).payload?.name;
+                  if (!name || name === "Sem dados") return;
+                  setChartBreakdown({ title: `Faturamento por produto: ${name}`, rows: productRows[name] || [] });
+                }}
+              />
             </BarChart>
           </ResponsiveContainer>
+          {chartBreakdown?.title.startsWith("Faturamento por produto") && (
+            <ChartBreakdownPanel title={chartBreakdown.title} rows={chartBreakdown.rows} onClose={() => setChartBreakdown(null)} />
+          )}
         </ChartCard>
         <ChartCard title="Evolução mensal do faturamento">
           <ResponsiveContainer width="100%" height={250}>
-            <AreaChart data={monthly}>
+            <AreaChart data={monthlyChart}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="month" />
               <YAxis />
@@ -1031,9 +1268,64 @@ function Dashboard({
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+function ChartBreakdownPanel({
+  title,
+  rows,
+  onClose,
+}: {
+  title: string;
+  rows: TaxBreakdownRow[];
+  onClose: () => void;
+}) {
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+
   return (
-    <section className="panel chart-card">
+    <div className="chart-breakdown-panel" role="dialog" aria-label={title}>
+      <div className="popover-title">
+        <strong>{title}</strong>
+        <button type="button" className="icon-btn" onClick={onClose} aria-label="Fechar detalhamento">
+          <X size={15} />
+        </button>
+      </div>
+      <div className="tax-popover-table">
+        <table className="static-table compact-table">
+          <thead>
+            <tr>
+              <th>N° nota</th>
+              <th>Emissão</th>
+              <th>Cliente</th>
+              <th>Valor</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length ? (
+              rows.map((row, index) => (
+                <tr key={`${row.invoiceNumber}-${row.issueDate}-${index}`}>
+                  <td>{row.invoiceNumber || "-"}</td>
+                  <td>{formatDate(row.issueDate)}</td>
+                  <td>{row.partyName || "-"}</td>
+                  <td>{formatCurrency(row.amount)}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={4}>Nenhum lançamento compondo este valor.</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="popover-total">
+        <span>Total</span>
+        <strong>{formatCurrency(total)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function ChartCard({ title, children, interactive = false }: { title: string; children: React.ReactNode; interactive?: boolean }) {
+  return (
+    <section className={`panel chart-card${interactive ? " interactive-chart" : ""}`}>
       <h2>{title}</h2>
       {children}
     </section>
@@ -1378,7 +1670,7 @@ function InvoiceForm({
   products: ProductItem[];
   editingInvoice?: Invoice | null;
   canEdit?: boolean;
-  onSave: (invoice: Invoice) => void;
+  onSave: (invoice: Invoice) => boolean | void;
   onDelete?: (id: string) => void;
   onOperation: (operation: LinkedOperation) => void;
   onAddParty: (kind: Party["kind"]) => void;
@@ -1418,7 +1710,7 @@ function InvoiceForm({
     ipi: editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0,
     ibs: editingInvoice?.items?.reduce((total, item) => total + Number(item.ibsValue || 0), 0) || 0,
     cbs: editingInvoice?.items?.reduce((total, item) => total + Number(item.cbsValue || 0), 0) || 0,
-    retention: editingInvoice?.retentionValue || 0,
+    retention: editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e" ? editingInvoice?.retentionValue || 0 : 0,
     net: editingInvoice?.totalInvoice || 0,
   }));
   const [financePfTotal, setFinancePfTotal] = useState(
@@ -1433,7 +1725,10 @@ function InvoiceForm({
   const [thirdPartyFreight, setThirdPartyFreight] = useState(
     Boolean(editingInvoice?.carrierName?.includes("terceiros")) || (!editingInvoice?.freightValue && Boolean(editingInvoice)),
   );
-  const [retentionEnabled, setRetentionEnabled] = useState(Boolean(editingInvoice?.retentionValue));
+  const [retentionEnabled, setRetentionEnabled] = useState(
+    Boolean((editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e") && editingInvoice?.retentionValue),
+  );
+  const [formWarnings, setFormWarnings] = useState<string[]>([]);
 
   useEffect(() => {
     if ((documentModel === "NFS-e" || documentModel === "CT-e") && !editingInvoice?.hasLinkedOperation) setLinked(false);
@@ -1461,14 +1756,37 @@ function InvoiceForm({
       const quantity = cleanNumber(formData.get(`quantity${suffix}`));
       const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
+      const unitValue = cleanNumber(unitValueField?.value || null);
+      if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
+    });
+
+    const noteProducts = itemIndexes.reduce((total, itemIndex) => {
+      const suffix = `_${itemIndex}`;
+      const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
+      return total + cleanNumber(totalValueField?.value || formData.get(`totalValue${suffix}`));
+    }, 0);
+    const noteItemDiscounts = itemIndexes.reduce((total, itemIndex) => total + cleanNumber(formData.get(`discountValue_${itemIndex}`)), 0);
+    const noteItemFreight = itemIndexes.reduce((total, itemIndex) => total + cleanNumber(formData.get(`itemFreightValue_${itemIndex}`)), 0);
+    const noteFreight = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
+    const noteDiscount = cleanNumber(formData.get("discountValue"));
+    const noteRetentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
+    const noteTaxBase = Math.max(noteProducts + noteFreight - noteItemDiscounts - noteDiscount - noteRetentionValue, 0);
+
+    itemIndexes.forEach((itemIndex) => {
+      const suffix = `_${itemIndex}`;
+      const quantity = cleanNumber(formData.get(`quantity${suffix}`));
+      const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
+      const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
       const discountValueField = form.elements.namedItem(`discountValue${suffix}`) as HTMLInputElement | null;
       const itemFreightValueField = form.elements.namedItem(`itemFreightValue${suffix}`) as HTMLInputElement | null;
+      const taxBaseField = form.elements.namedItem(`taxBase${suffix}`) as HTMLInputElement | null;
       const icmsBaseField = form.elements.namedItem(`icmsBase${suffix}`) as HTMLInputElement | null;
       const icmsRateField = form.elements.namedItem(`icmsRate${suffix}`) as HTMLInputElement | null;
       const icmsValueField = form.elements.namedItem(`icmsValue${suffix}`) as HTMLInputElement | null;
-      const pisBaseField = form.elements.namedItem(`pisCofinsBase${suffix}`) as HTMLInputElement | null;
+      const pisBaseField = form.elements.namedItem(`pisBase${suffix}`) as HTMLInputElement | null;
       const pisRateField = form.elements.namedItem(`pisRate${suffix}`) as HTMLInputElement | null;
       const pisValueField = form.elements.namedItem(`pisValue${suffix}`) as HTMLInputElement | null;
+      const cofinsBaseField = form.elements.namedItem(`cofinsBase${suffix}`) as HTMLInputElement | null;
       const cofinsRateField = form.elements.namedItem(`cofinsRate${suffix}`) as HTMLInputElement | null;
       const cofinsValueField = form.elements.namedItem(`cofinsValue${suffix}`) as HTMLInputElement | null;
       const ipiBaseField = form.elements.namedItem(`ipiBase${suffix}`) as HTMLInputElement | null;
@@ -1480,6 +1798,20 @@ function InvoiceForm({
       const cbsBaseField = form.elements.namedItem(`cbsBase${suffix}`) as HTMLInputElement | null;
       const cbsRateField = form.elements.namedItem(`cbsRate${suffix}`) as HTMLInputElement | null;
       const cbsValueField = form.elements.namedItem(`cbsValue${suffix}`) as HTMLInputElement | null;
+      const updateTaxFields = (
+        enabledName: string,
+        baseField: HTMLInputElement | null,
+        rateField: HTMLInputElement | null,
+        valueField: HTMLInputElement | null,
+      ) => {
+        const enabled = formData.get(`${enabledName}${suffix}`) === "on";
+        const base = enabled ? taxBase : 0;
+        if (baseField) baseField.value = formatCurrency(base);
+        const rate = cleanNumber(rateField?.value || null);
+        const value = enabled && base && rate ? (base * rate) / 100 : 0;
+        if (valueField) valueField.value = formatCurrency(value);
+        return value;
+      };
 
       const unitValue = cleanNumber(unitValueField?.value || null);
       if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
@@ -1488,24 +1820,14 @@ function InvoiceForm({
       products += totalValue;
       discounts += cleanNumber(discountValueField?.value || null);
       freightItems += cleanNumber(itemFreightValueField?.value || null);
-      const icmsBase = cleanNumber(icmsBaseField?.value || null) || totalValue;
-      const icmsRate = cleanNumber(icmsRateField?.value || null);
-      if (icmsBase && icmsRate && icmsValueField) icmsValueField.value = formatCurrency((icmsBase * icmsRate) / 100);
-
-      const pisBase = cleanNumber(pisBaseField?.value || null) || totalValue;
-      const pisRate = cleanNumber(pisRateField?.value || null);
-      const cofinsRate = cleanNumber(cofinsRateField?.value || null);
-      if (pisBase && pisRate && pisValueField) pisValueField.value = formatCurrency((pisBase * pisRate) / 100);
-      if (pisBase && cofinsRate && cofinsValueField) cofinsValueField.value = formatCurrency((pisBase * cofinsRate) / 100);
-      const ipiBase = cleanNumber(ipiBaseField?.value || null) || totalValue;
-      const ipiRate = cleanNumber(ipiRateField?.value || null);
-      if (ipiBase && ipiRate && ipiValueField) ipiValueField.value = formatCurrency((ipiBase * ipiRate) / 100);
-      const ibsBase = cleanNumber(ibsBaseField?.value || null) || totalValue;
-      const ibsRate = cleanNumber(ibsRateField?.value || null);
-      if (ibsBase && ibsRate && ibsValueField) ibsValueField.value = formatCurrency((ibsBase * ibsRate) / 100);
-      const cbsBase = cleanNumber(cbsBaseField?.value || null) || totalValue;
-      const cbsRate = cleanNumber(cbsRateField?.value || null);
-      if (cbsBase && cbsRate && cbsValueField) cbsValueField.value = formatCurrency((cbsBase * cbsRate) / 100);
+      const taxBase = noteTaxBase;
+      if (taxBaseField) taxBaseField.value = formatCurrency(taxBase);
+      updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
+      updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
+      updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField);
+      updateTaxFields("ipiEnabled", ipiBaseField, ipiRateField, ipiValueField);
+      updateTaxFields("ibsEnabled", ibsBaseField, ibsRateField, ibsValueField);
+      updateTaxFields("cbsEnabled", cbsBaseField, cbsRateField, cbsValueField);
       icms += cleanNumber(icmsValueField?.value || null);
       pis += cleanNumber(pisValueField?.value || null);
       cofins += cleanNumber(cofinsValueField?.value || null);
@@ -1515,8 +1837,8 @@ function InvoiceForm({
     });
     const freightValue = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
     const discountValue = cleanNumber(formData.get("discountValue"));
-    const retentionValue = formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
-    const net = Math.max(products + freightValue + freightItems - discounts - discountValue - retentionValue, 0);
+    const retentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
+    const net = Math.max(products + freightValue - discounts - discountValue - retentionValue, 0);
     const amountFields = installmentIndexes
       .map((index) => form.elements.namedItem(`installmentAmount_${index}`) as HTMLInputElement | null)
       .filter(Boolean) as HTMLInputElement[];
@@ -1528,6 +1850,36 @@ function InvoiceForm({
         field.value = formatCurrency(value);
       });
     }
+    const nextWarnings: string[] = [];
+    const mainCfop = String(formData.get("mainCfop") || selectedMainCfop || "");
+    const cfopCode = getCfopCode(mainCfop);
+    const cfopExists = !cfopCode || fiscalConfig.cfops.some((cfop) => getCfopCode(cfop) === cfopCode);
+    const cfopRule = cfopCode ? fiscalConfig.cfopRules?.[cfopCode] : undefined;
+    if (!selectedParty && !formData.get("partyName")) {
+      nextWarnings.push(isReceived ? "Selecione um fornecedor cadastrado antes de salvar." : "Selecione um cliente cadastrado antes de salvar.");
+    }
+    if (!cfopExists) nextWarnings.push("CFOP selecionado não está cadastrado nas configurações.");
+    if (cfopCode && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
+      nextWarnings.push("CFOP sem marcação de venda ou custo. A nota será listada, mas não entra nos relatórios financeiros.");
+    }
+    if (net > 0 && cfopCode && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
+      nextWarnings.push("Há valor na nota com CFOP sem impacto financeiro. Confira se é remessa/simbólica.");
+    }
+    if (itemIndexes.some((itemIndex) => !String(formData.get(`costCenter_${itemIndex}`) || "").trim() && isReceived)) {
+      nextWarnings.push("Há item sem centro de custo.");
+    }
+    const hasEnabledTaxWithoutRate = itemIndexes.some((itemIndex) =>
+      ["icms", "pis", "cofins", "ipi", "ibs", "cbs"].some((tax) => {
+        const suffix = `_${itemIndex}`;
+        return formData.get(`${tax}Enabled${suffix}`) === "on" && cleanNumber(formData.get(`${tax}Rate${suffix}`)) === 0;
+      }),
+    );
+    if (hasEnabledTaxWithoutRate) nextWarnings.push("Há imposto marcado com alíquota zerada.");
+    const installmentTotal = amountFields.reduce((total, field) => total + cleanNumber(field.value), 0);
+    if (amountFields.length && Math.abs(installmentTotal - net) > 0.01) {
+      nextWarnings.push("A soma das parcelas está diferente do total líquido da nota.");
+    }
+    setFormWarnings(Array.from(new Set(nextWarnings)));
     setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, retention: retentionValue, net });
     setFinancePfTotal(
       installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
@@ -1550,19 +1902,27 @@ function InvoiceForm({
     const currentDocumentModel = String(form.get("documentModel") || documentModel);
     let mainCfop = String(form.get("mainCfop") || "");
     if (currentDocumentModel === "NFS-e") mainCfop = "NFS-e";
-    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop));
+    const rawTotalProducts = itemIndexes.reduce((total, index) => {
+      const suffix = `_${index}`;
+      const quantity = cleanNumber(form.get(`quantity${suffix}`));
+      const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
+      return total + (cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue);
+    }, 0);
+    const rawItemDiscounts = itemIndexes.reduce((total, index) => total + cleanNumber(form.get(`discountValue_${index}`)), 0);
+    const rawFreightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
+    const rawDiscountValue = cleanNumber(form.get("discountValue"));
+    const rawRetentionValue = isServiceReceived && form.get("retentionEnabled") === "on" ? cleanNumber(form.get("retentionValue")) : 0;
+    const noteTaxBase = Math.max(rawTotalProducts + rawFreightValue - rawItemDiscounts - rawDiscountValue - rawRetentionValue, 0);
+    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, noteTaxBase));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
-    const itemFreightTotal = items.reduce((total, item) => total + Number(item.freightValue || 0), 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const discountValue = cleanNumber(form.get("discountValue"));
-    const retentionType = isReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
-      ? isServiceReceived
-        ? "Retenções de impostos"
-        : "FUNRURAL"
+    const retentionType = isServiceReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
+      ? "Retenções de impostos"
       : "";
     const retentionValue = retentionType ? cleanNumber(form.get("retentionValue")) : 0;
-    const totalInvoice = Math.max(totalProducts + freightValue + itemFreightTotal - discountValue - itemDiscountTotal - retentionValue, 0);
+    const totalInvoice = Math.max(totalProducts + freightValue - discountValue - itemDiscountTotal - retentionValue, 0);
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
       paymentCondition: String(form.get(`paymentCondition_${index}`) || ""),
@@ -1597,8 +1957,9 @@ function InvoiceForm({
     const cfemValue = isReceived ? 0 : cfemBase * (fiscalConfig.cfemRate / 100);
     const now = new Date().toISOString();
     const hasLinkedOperation = form.get("hasLinkedOperation") === "on";
-    const freightLinkNote = isFreightDocument && String(form.get("linkedInvoiceNumber") || "")
-      ? `Frete referente à NF-e ${String(form.get("linkedInvoiceNumber") || "")}`
+    const linkedInvoiceNumberValue = normalizeNoteNumber(String(form.get("linkedInvoiceNumber") || ""));
+    const freightLinkNote = isFreightDocument && linkedInvoiceNumberValue
+      ? `Frete referente à NF-e ${linkedInvoiceNumberValue}`
       : "";
     const manualInternalNotes = String(form.get("internalNotes") || "");
 
@@ -1616,7 +1977,7 @@ function InvoiceForm({
                 ? "Entrada"
                 : "Saida"),
       ),
-      invoiceNumber: String(form.get("invoiceNumber") || ""),
+      invoiceNumber: normalizeNoteNumber(String(form.get("invoiceNumber") || "")),
       series: "1",
       accessKey: "",
       issueDate: String(form.get("issueDate") || todayIso()),
@@ -1637,7 +1998,7 @@ function InvoiceForm({
       carrierName: isFreightDocument ? "" : String(form.get("carrierName") || ""),
       paymentDate: editingInvoice?.paymentDate || "",
       paid: Boolean(editingInvoice?.paid),
-      status: String(form.get("status") || "Lancada") as Invoice["status"],
+      status: String(form.get("status") || "Faturada") as Invoice["status"],
       category: items[0]?.category || "",
       costCenter: items[0]?.costCenter || "",
       totalProducts,
@@ -1666,9 +2027,9 @@ function InvoiceForm({
         .join("\n"),
       xmlFileName: "",
       pdfFileName: "",
-      hasLinkedOperation: isFreightDocument ? false : hasLinkedOperation,
-      linkedOperationType: String(form.get("linkedOperationType") || ""),
-      linkedInvoiceNumber: String(form.get("linkedInvoiceNumber") || ""),
+      hasLinkedOperation,
+      linkedOperationType: String(form.get("linkedOperationType") || (isFreightDocument ? "Vinculação CTE" : "")),
+      linkedInvoiceNumber: linkedInvoiceNumberValue,
       finalRecipientName: String(form.get("finalRecipientName") || ""),
       physicalReceiverName: "",
       createdAt: editingInvoice?.createdAt || now,
@@ -1677,10 +2038,11 @@ function InvoiceForm({
       financialInstallments,
     };
 
-    onSave(invoice);
+    const saved = onSave(invoice);
+    if (saved === false) return;
 
     if (hasLinkedOperation && !isFreightDocument) {
-      const linkedInvoiceNumber = String(form.get("linkedInvoiceNumber") || "");
+      const linkedInvoiceNumber = linkedInvoiceNumberValue;
       const existingOperation = operations.find(
         (operation) =>
           operation.mainInvoiceId === invoice.id ||
@@ -1741,9 +2103,14 @@ function InvoiceForm({
             </button>
           )}
         </div>
+        {isEditing && !canEdit && (
+          <div className="warning-list">
+            <span>Este lançamento pertence a uma competência fechada. Desbloqueie o período na Apuração Fiscal para alterar.</span>
+          </div>
+        )}
         <div className="form-grid">
           <Field label={isReceived ? "Data de emissão fornecedor" : "Data de emissão"} name="issueDate" type="date" defaultValue={editingInvoice?.issueDate || todayIso()} required />
-          <Field label="Número da nota" name="invoiceNumber" defaultValue={onlyDigits(editingInvoice?.invoiceNumber)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+          <Field label="Número da nota" name="invoiceNumber" defaultValue={normalizeNoteNumber(editingInvoice?.invoiceNumber)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
           {isReceived && (
             <label className="field">
               <span>Tipo de documento</span>
@@ -1787,14 +2154,25 @@ function InvoiceForm({
           <Field label="Tipo de operação" name="operationType" defaultValue={editingInvoice?.operationType || (isServiceReceived ? "Serviço tomado" : isFreightDocument ? "Conhecimento de frete" : isReceived ? "Compra para uso e consumo" : "Venda de produção")} />
           <label className="field">
             <span>Status</span>
-            <select name="status" defaultValue={editingInvoice?.status || "Lancada"}>
-              {["Lancada", "Pendente", "Cancelada", "Aguardando XML", "Em conferência"].map((status) => (
+            <select name="status" defaultValue={editingInvoice?.status === "Lancada" ? "Faturada" : editingInvoice?.status || "Faturada"}>
+              {["Faturada", "Pendente", "Cancelada", "Em conferência"].map((status) => (
                 <option key={status}>{status}</option>
               ))}
             </select>
           </label>
         </div>
       </section>
+
+      {formWarnings.length > 0 && (
+        <section className="invoice-warnings">
+          {formWarnings.map((warning) => (
+            <div className="invoice-warning" key={warning}>
+              <AlertTriangle size={16} />
+              <span>{warning}</span>
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="panel">
         <div className="panel-title between">
@@ -1814,6 +2192,8 @@ function InvoiceForm({
             const existingItem = editingInvoice?.items[position];
             const selectedProductId = selectedProducts[itemIndex] || existingItem?.productId || "";
             const selectedProduct = products.find((product) => product.id === selectedProductId);
+            const taxIsEnabled = (base?: number, value?: number, rate?: number) => Boolean(Number(base || 0) || Number(value || 0) || Number(rate || 0));
+            const taxBaseValue = formatCurrency(existingItem?.icmsBase || existingItem?.pisBase || existingItem?.cofinsBase || existingItem?.totalValue || 0);
             return (
             <article className="item-card" key={`${itemIndex}-${selectedProductId || "manual"}`}>
               <div className="panel-title between">
@@ -1830,10 +2210,11 @@ function InvoiceForm({
                 )}
               </div>
               <div className="form-grid">
-                {isReceived && !isNonProductDocument ? (
+                <div className="subsection-label">Produto/serviço</div>
+                {!isReceived ? (
                   <>
                     <label className="field">
-                      <span>Produto comprado</span>
+                      <span>Produto vendido</span>
                       <select
                         name={`productId_${itemIndex}`}
                         value={selectedProductId}
@@ -1855,33 +2236,97 @@ function InvoiceForm({
                 )}
                 {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
                 {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || selectedProduct?.defaultCostCenter || ""} />}
-                {isReceived && <Field label="Conta contábil" name={`accountingAccount_${itemIndex}`} defaultValue={existingItem?.accountingAccount || selectedProduct?.accountingAccount || ""} />}
-                {isReceived && <Field label="Cor" name={`productColor_${itemIndex}`} defaultValue={existingItem?.productColor || selectedProduct?.color || ""} sanitize="letters" />}
                 <Field label={isNonProductDocument ? "NCM (opcional)" : "NCM"} name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required={!isNonProductDocument} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
                 <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={existingItem?.cstIcms || ""} />
                 <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={existingItem?.unit || selectedProduct?.defaultUnit || (isNonProductDocument ? "SV" : "UN")} />
+                <div className="subsection-label">Valores</div>
                 <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(existingItem?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
                 <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
-                <MoneyField label="Frete do item" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
-                <MoneyField label="Base ICMS" name={`icmsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.icmsBase || 0)} autoCalc />
-                <PercentField label="Alíquota ICMS %" name={`icmsRate_${itemIndex}`} defaultValue={existingItem?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)} />
-                <MoneyField label="Valor ICMS" name={`icmsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.icmsValue || 0)} autoCalc />
-                <MoneyField label="Base PIS/COFINS" name={`pisCofinsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.pisBase || 0)} autoCalc />
-                <PercentField label="Alíquota PIS %" name={`pisRate_${itemIndex}`} defaultValue={existingItem?.pisRate || fiscalConfig.pisRate} />
-                <MoneyField label="Valor PIS" name={`pisValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.pisValue || 0)} autoCalc />
-                <PercentField label="Alíquota COFINS %" name={`cofinsRate_${itemIndex}`} defaultValue={existingItem?.cofinsRate || fiscalConfig.cofinsRate} />
-                <MoneyField label="Valor COFINS" name={`cofinsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cofinsValue || 0)} autoCalc />
-                <MoneyField label="Base IPI" name={`ipiBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ipiBase || 0)} autoCalc />
-                <PercentField label="Alíquota IPI %" name={`ipiRate_${itemIndex}`} defaultValue={existingItem?.ipiRate || 0} />
-                <MoneyField label="Valor IPI" name={`ipiValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ipiValue || 0)} autoCalc />
-                <MoneyField label="Base IBS" name={`ibsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ibsBase || 0)} autoCalc />
-                <PercentField label="Alíquota IBS %" name={`ibsRate_${itemIndex}`} defaultValue={existingItem?.ibsRate || 0} />
-                <MoneyField label="Valor IBS" name={`ibsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.ibsValue || 0)} autoCalc />
-                <MoneyField label="Base CBS" name={`cbsBase_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cbsBase || 0)} autoCalc />
-                <PercentField label="Alíquota CBS %" name={`cbsRate_${itemIndex}`} defaultValue={existingItem?.cbsRate || 0} />
-                <MoneyField label="Valor CBS" name={`cbsValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.cbsValue || 0)} autoCalc />
+                <div className="item-freight-demo">
+                  <MoneyField label="Frete do item (demonstrativo)" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
+                </div>
+                <input name={`taxBase_${itemIndex}`} type="hidden" defaultValue={taxBaseValue} />
+                <div className="subsection-label">Impostos</div>
+                <div className="tax-control-list">
+                  <TaxControl
+                    title="ICMS"
+                    enabledName={`icmsEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.icmsBase, existingItem?.icmsValue, existingItem?.icmsRate)}
+                    baseName={`icmsBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.icmsBase || 0)}
+                    rateName={`icmsRate_${itemIndex}`}
+                    rateValue={existingItem?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)}
+                    valueName={`icmsValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.icmsValue || 0)}
+                    creditName={`icmsCreditable_${itemIndex}`}
+                    creditDefault={existingItem?.icmsCreditable ?? true}
+                    showCredit={isReceived}
+                  />
+                  <TaxControl
+                    title="PIS"
+                    enabledName={`pisEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.pisBase, existingItem?.pisValue, existingItem?.pisRate)}
+                    baseName={`pisBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.pisBase || 0)}
+                    rateName={`pisRate_${itemIndex}`}
+                    rateValue={existingItem?.pisRate || fiscalConfig.pisRate}
+                    valueName={`pisValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.pisValue || 0)}
+                    creditName={`pisCreditable_${itemIndex}`}
+                    creditDefault={existingItem?.pisCreditable ?? true}
+                    showCredit={isReceived}
+                  />
+                  <TaxControl
+                    title="COFINS"
+                    enabledName={`cofinsEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.cofinsBase, existingItem?.cofinsValue, existingItem?.cofinsRate)}
+                    baseName={`cofinsBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.cofinsBase || 0)}
+                    rateName={`cofinsRate_${itemIndex}`}
+                    rateValue={existingItem?.cofinsRate || fiscalConfig.cofinsRate}
+                    valueName={`cofinsValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.cofinsValue || 0)}
+                    creditName={`cofinsCreditable_${itemIndex}`}
+                    creditDefault={existingItem?.cofinsCreditable ?? true}
+                    showCredit={isReceived}
+                  />
+                  <TaxControl
+                    title="IPI"
+                    enabledName={`ipiEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.ipiBase, existingItem?.ipiValue, existingItem?.ipiRate)}
+                    baseName={`ipiBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.ipiBase || 0)}
+                    rateName={`ipiRate_${itemIndex}`}
+                    rateValue={existingItem?.ipiRate || 0}
+                    valueName={`ipiValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.ipiValue || 0)}
+                  />
+                  <TaxControl
+                    title="IBS"
+                    enabledName={`ibsEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.ibsBase, existingItem?.ibsValue, existingItem?.ibsRate)}
+                    baseName={`ibsBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.ibsBase || 0)}
+                    rateName={`ibsRate_${itemIndex}`}
+                    rateValue={existingItem?.ibsRate || 0}
+                    valueName={`ibsValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.ibsValue || 0)}
+                  />
+                  <TaxControl
+                    title="CBS"
+                    enabledName={`cbsEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.cbsBase, existingItem?.cbsValue, existingItem?.cbsRate)}
+                    baseName={`cbsBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.cbsBase || 0)}
+                    rateName={`cbsRate_${itemIndex}`}
+                    rateValue={existingItem?.cbsRate || 0}
+                    valueName={`cbsValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.cbsValue || 0)}
+                  />
+                </div>
+                {!isReceived && <div className="subsection-label">Dados do bloco</div>}
                 {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={existingItem?.materialType || ""} sanitize="letters" />}
                 {!isReceived && <Field label="Número do bloco" name={`blockNumber_${itemIndex}`} defaultValue={onlyDigits(existingItem?.blockNumber)} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />}
                 {!isReceived && <Field label="Cor do bloco" name={`blockColor_${itemIndex}`} defaultValue={existingItem?.blockColor || ""} sanitize="letters" />}
@@ -1889,22 +2334,6 @@ function InvoiceForm({
                 {!isReceived && <Field label="Medidas do bloco" name={`blockMeasures_${itemIndex}`} defaultValue={existingItem?.blockMeasures || ""} />}
                 {!isReceived && <KgField label="KG" name={`kilograms_${itemIndex}`} defaultValue={existingItem?.kilograms || "0"} />}
               </div>
-              {isReceived && (
-                <div className="check-row">
-                  <label className="check">
-                    <input name={`icmsCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    ICMS creditável
-                  </label>
-                  <label className="check">
-                    <input name={`pisCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    PIS creditável
-                  </label>
-                  <label className="check">
-                    <input name={`cofinsCreditable_${itemIndex}`} type="checkbox" defaultChecked />
-                    COFINS creditável
-                  </label>
-                </div>
-              )}
             </article>
           );
           })}
@@ -1927,10 +2356,10 @@ function InvoiceForm({
           <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />
           <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
           <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
-          <StatCard title="Retenções/FUNRURAL" value={formatCurrency(itemTotals.retention)} tone="danger" />
+          <StatCard title="Retenções" value={formatCurrency(itemTotals.retention)} tone="danger" />
           <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
         </div>
-        {isReceived && !isFreightDocument && (
+        {isServiceReceived && !isFreightDocument && (
           <div className="retention-box">
             <label className="check">
               <input
@@ -1939,11 +2368,11 @@ function InvoiceForm({
                 checked={retentionEnabled}
                 onChange={(event) => setRetentionEnabled(event.target.checked)}
               />
-              {isServiceReceived ? "Retenção de impostos" : "Retenção de FUNRURAL"}
+              Retenção de impostos
             </label>
             {retentionEnabled && (
               <MoneyField
-                label={isServiceReceived ? "Valor das retenções" : "Valor FUNRURAL"}
+                label="Valor das retenções"
                 name="retentionValue"
                 defaultValue={formatCurrency(editingInvoice?.retentionValue || 0)}
                 autoCalc
@@ -1955,7 +2384,7 @@ function InvoiceForm({
           <div className="linked-note-box">
             <h3>Vincular NF-e ao frete</h3>
             <div className="form-grid compact">
-              <Field label="Nota eletrônica relacionada" name="linkedInvoiceNumber" defaultValue={editingInvoice?.linkedInvoiceNumber || ""} />
+              <Field label="Nota eletrônica relacionada" name="linkedInvoiceNumber" defaultValue={normalizeNoteNumber(editingInvoice?.linkedInvoiceNumber)} />
               <label className="field wide">
                 <span>Observação do vínculo</span>
                 <input
@@ -2077,8 +2506,8 @@ function InvoiceForm({
           </div>
           {linked && (
             <div className="form-grid">
-                <Field label="Tipo de operação vinculada" name="linkedOperationType" options={fiscalConfig.linkedTypes} defaultValue={editingInvoice?.linkedOperationType || "Compra com triangulação"} />
-                <Field label="Nota vinculada" name="linkedInvoiceNumber" defaultValue={editingInvoice?.linkedInvoiceNumber || ""} />
+                <Field label="Tipo de operação vinculada" name="linkedOperationType" options={fiscalConfig.linkedTypes} defaultValue={editingInvoice?.linkedOperationType || (isFreightDocument ? "Vinculação CTE" : "Compra com triangulação")} />
+                <Field label="Nota vinculada" name="linkedInvoiceNumber" defaultValue={normalizeNoteNumber(editingInvoice?.linkedInvoiceNumber)} />
                 <Field label="Chave nota vinculada" name="linkedAccessKey" />
                 <Field label="CFOP nota vinculada" name="linkedCfop" defaultValue="5923" />
                 <Field label="Destinatário final" name="finalRecipientName" defaultValue={editingInvoice?.finalRecipientName || ""} />
@@ -2201,14 +2630,13 @@ function LinkedOperationsView({
   );
 }
 
-function SearchView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
+function SearchView({ invoices }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
   const [query, setQuery] = useState("");
   const [dateStart, setDateStart] = useState("");
   const [dateEnd, setDateEnd] = useState("");
   const rows = invoices
     .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
     .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd));
-  const operationRows = operations.filter((op) => searchMatches(operationSearchText(op), query) && withinDateRange(op.operationDate, dateStart, dateEnd));
 
   return (
     <div className="view-stack">
@@ -2233,18 +2661,106 @@ function SearchView({ invoices, operations }: { invoices: Invoice[]; operations:
           <InvoiceRows invoices={rows} />
         </div>
       </section>
-      <section className="panel">
-        <h2>Operações Vinculadas</h2>
-        <div className="table-wrap">
-          <OperationRows operations={operationRows} />
-        </div>
+    </div>
+  );
+}
+
+type ConferenceIssue = {
+  invoice: Invoice;
+  reason: string;
+};
+
+function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (invoice: Invoice) => void }) {
+  const financialInvoices = invoices.filter(invoiceHasFinancialEffect);
+  const missingCostCenter: ConferenceIssue[] = financialInvoices
+    .filter((invoice) => !hasInvoiceCostCenter(invoice))
+    .map((invoice) => ({ invoice, reason: "Sem centro de custo informado" }));
+  const missingCfop: ConferenceIssue[] = invoices
+    .filter((invoice) => !cfopIsConfigured(invoice))
+    .map((invoice) => ({ invoice, reason: "CFOP ausente ou não cadastrado" }));
+  const missingLinks: ConferenceIssue[] = invoices
+    .filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice))
+    .map((invoice) => ({ invoice, reason: "Operação exige vínculo com outra nota" }));
+  const missingHolder: ConferenceIssue[] = financialInvoices
+    .filter((invoice) => !invoiceHasHolder(invoice))
+    .map((invoice) => ({ invoice, reason: "Parcela sem portador informado" }));
+  const sections = [
+    { title: "Notas sem centro de custo", items: missingCostCenter, tone: "warn" as const },
+    { title: "Notas sem CFOP configurado", items: missingCfop, tone: "danger" as const },
+    { title: "Notas sem vínculo necessário", items: missingLinks, tone: "warn" as const },
+    { title: "Lançamentos sem portador", items: missingHolder, tone: "danger" as const },
+  ];
+
+  return (
+    <div className="view-stack">
+      <section className="stats-grid">
+        {sections.map((section) => (
+          <StatCard key={section.title} title={section.title} value={String(section.items.length)} tone={section.tone} />
+        ))}
+      </section>
+
+      <section className="conference-grid">
+        {sections.map((section) => (
+          <section className="panel conference-panel" key={section.title}>
+            <div className="panel-title between">
+              <h2>{section.title}</h2>
+              <Badge value={section.items.length ? "Pendente" : "Conferido"} />
+            </div>
+            <div className="table-wrap conference-table">
+              <table className="static-table">
+                <thead>
+                  <tr>
+                    <th>N° nota</th>
+                    <th>Data</th>
+                    <th>Cliente/fornecedor</th>
+                    <th>CFOP</th>
+                    <th>Motivo</th>
+                    <th>Ação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {section.items.map(({ invoice, reason }) => (
+                    <tr key={`${section.title}-${invoice.id}`}>
+                      <td>{normalizeNoteNumber(invoice.invoiceNumber) || "-"}</td>
+                      <td>{formatDate(invoiceDate(invoice))}</td>
+                      <td>{invoice.partyName || "-"}</td>
+                      <td>{invoice.mainCfop || "-"}</td>
+                      <td>{reason}</td>
+                      <td>
+                        <button className="icon-btn" type="button" title="Abrir lançamento" onClick={() => onOpen(invoice)}>
+                          <Search size={16} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!section.items.length && (
+                    <tr>
+                      <td colSpan={6}>Nenhuma pendência encontrada.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))}
       </section>
     </div>
   );
 }
 
-function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["totals"]; invoices: Invoice[] }) {
+function TaxView({
+  invoices,
+  closedPeriods,
+  onTogglePeriodLock,
+}: {
+  totals: ReturnType<typeof useFiscalStore>["totals"];
+  invoices: Invoice[];
+  closedPeriods: Record<string, string>;
+  onTogglePeriodLock: (period: string, close: boolean) => void;
+}) {
   const [period, setPeriod] = useState("2026-06");
+  const [openBreakdown, setOpenBreakdown] = useState<string | null>(null);
+  const closedAt = closedPeriods[period];
   const periodInvoices = invoices.filter((invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return date?.slice(0, 7) === period;
@@ -2253,6 +2769,15 @@ function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["tota
   const receivedTaxable = periodInvoices.filter(invoiceConsidersCost);
   const sumInvoices = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, invoice) => total + Number(invoice[field] || 0), 0);
+  const buildRows = (items: Invoice[], selector: (invoice: Invoice) => number): TaxBreakdownRow[] =>
+    items
+      .map((invoice) => ({
+        invoiceNumber: normalizeNoteNumber(invoice.invoiceNumber),
+        issueDate: invoice.issueDate,
+        partyName: invoice.partyName,
+        amount: selector(invoice),
+      }))
+      .filter((row) => Math.abs(row.amount) > 0.009);
 
   const issuedRevenue = sumInvoices(issuedTaxable, "totalInvoice");
   const receivedRevenue = sumInvoices(receivedTaxable, "totalInvoice");
@@ -2264,6 +2789,54 @@ function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["tota
   const receivedCofins = sumInvoices(receivedTaxable, "cofinsCreditValue");
   const cfemBase = Math.max(issuedRevenue - issuedIcms - issuedPis - issuedCofins, 0);
   const cfemDue = cfemBase * (fiscalConfig.cfemRate / 100);
+  const retainedInvoices = periodInvoices.filter((invoice) => invoice.retentionType === "Retenções de impostos" && Number(invoice.retentionValue || 0) > 0);
+  const retainedTaxes = sumInvoices(retainedInvoices, "retentionValue");
+  const breakdowns: Record<string, TaxBreakdownRow[]> = {
+    issuedRevenue: buildRows(issuedTaxable, (invoice) => invoice.totalInvoice),
+    receivedRevenue: buildRows(receivedTaxable, (invoice) => invoice.totalInvoice),
+    cfemDue: buildRows(issuedTaxable, (invoice) => Math.max(invoice.totalInvoice - invoice.icmsValue - invoice.pisValue - invoice.cofinsValue, 0) * (fiscalConfig.cfemRate / 100)),
+    issuedIcms: buildRows(issuedTaxable, (invoice) => invoice.icmsValue),
+    receivedIcms: buildRows(receivedTaxable, (invoice) => invoice.icmsCreditValue),
+    balanceIcms: [
+      ...buildRows(issuedTaxable, (invoice) => invoice.icmsValue),
+      ...buildRows(receivedTaxable, (invoice) => -invoice.icmsCreditValue),
+    ],
+    issuedPis: buildRows(issuedTaxable, (invoice) => invoice.pisValue),
+    receivedPis: buildRows(receivedTaxable, (invoice) => invoice.pisCreditValue),
+    balancePis: [
+      ...buildRows(issuedTaxable, (invoice) => invoice.pisValue),
+      ...buildRows(receivedTaxable, (invoice) => -invoice.pisCreditValue),
+    ],
+    issuedCofins: buildRows(issuedTaxable, (invoice) => invoice.cofinsValue),
+    receivedCofins: buildRows(receivedTaxable, (invoice) => invoice.cofinsCreditValue),
+    balanceCofins: [
+      ...buildRows(issuedTaxable, (invoice) => invoice.cofinsValue),
+      ...buildRows(receivedTaxable, (invoice) => -invoice.cofinsCreditValue),
+    ],
+    retainedTaxes: buildRows(retainedInvoices, (invoice) => invoice.retentionValue || 0),
+  };
+  const retainedByType = retainedInvoices.reduce<Record<string, number>>((groups, invoice) => {
+    const label = invoice.retentionType || "Retenção";
+    groups[label] = (groups[label] || 0) + Number(invoice.retentionValue || 0);
+    return groups;
+  }, {});
+  const card = (
+    key: string,
+    title: string,
+    value: number,
+    tone: "default" | "good" | "warn" | "danger" | "info" = "default",
+  ) => (
+    <TaxStatCard
+      key={key}
+      title={title}
+      value={value}
+      tone={tone}
+      rows={breakdowns[key] || []}
+      isOpen={openBreakdown === key}
+      onToggle={() => setOpenBreakdown(openBreakdown === key ? null : key)}
+      onClose={() => setOpenBreakdown(null)}
+    />
+  );
 
   return (
     <div className="view-stack">
@@ -2273,25 +2846,35 @@ function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["tota
             <span>Período de apuração</span>
             <input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} />
           </label>
+          <div className={`period-lock-pill ${closedAt ? "closed" : "open"}`}>
+            <Lock size={15} />
+            {closedAt ? `Competência fechada em ${formatDate(closedAt)}` : "Competência aberta"}
+          </div>
         </div>
-        <ActionButton icon={RefreshCw} onClick={() => setPeriod("2026-06")}>
-          Atualizar
-        </ActionButton>
+        <div className="toolbar-actions">
+          <ActionButton icon={Lock} variant={closedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !closedAt)}>
+            {closedAt ? "Desbloquear competência" : "Fechar competência"}
+          </ActionButton>
+          <ActionButton icon={RefreshCw} onClick={() => setPeriod("2026-06")}>
+            Atualizar
+          </ActionButton>
+        </div>
       </div>
 
       <section className="tax-summary-grid">
-        <StatCard title="Receita tributável emitida" value={formatCurrency(issuedRevenue)} tone="good" />
-        <StatCard title="Receita tributável recebida" value={formatCurrency(receivedRevenue)} />
-        <StatCard title="CFEM a recolher" value={formatCurrency(cfemDue)} tone="warn" />
-        <StatCard title="ICMS débito" value={formatCurrency(issuedIcms)} tone="danger" />
-        <StatCard title="ICMS crédito" value={formatCurrency(receivedIcms)} tone="good" />
-        <StatCard title="Saldo ICMS" value={formatCurrency(issuedIcms - receivedIcms)} tone="warn" />
-        <StatCard title="PIS débito" value={formatCurrency(issuedPis)} tone="danger" />
-        <StatCard title="PIS crédito" value={formatCurrency(receivedPis)} tone="good" />
-        <StatCard title="Saldo PIS" value={formatCurrency(issuedPis - receivedPis)} tone="warn" />
-        <StatCard title="COFINS débito" value={formatCurrency(issuedCofins)} tone="danger" />
-        <StatCard title="COFINS crédito" value={formatCurrency(receivedCofins)} tone="good" />
-        <StatCard title="Saldo COFINS" value={formatCurrency(issuedCofins - receivedCofins)} tone="warn" />
+        {card("issuedRevenue", "Receita tributável emitida", issuedRevenue, "good")}
+        {card("receivedRevenue", "Receita tributável recebida", receivedRevenue)}
+        {card("cfemDue", "CFEM a recolher", cfemDue, "warn")}
+        {card("issuedIcms", "ICMS débito", issuedIcms, "danger")}
+        {card("receivedIcms", "ICMS crédito", receivedIcms, "good")}
+        {card("balanceIcms", "Saldo ICMS", issuedIcms - receivedIcms, "warn")}
+        {card("issuedPis", "PIS débito", issuedPis, "danger")}
+        {card("receivedPis", "PIS crédito", receivedPis, "good")}
+        {card("balancePis", "Saldo PIS", issuedPis - receivedPis, "warn")}
+        {card("issuedCofins", "COFINS débito", issuedCofins, "danger")}
+        {card("receivedCofins", "COFINS crédito", receivedCofins, "good")}
+        {card("balanceCofins", "Saldo COFINS", issuedCofins - receivedCofins, "warn")}
+        {card("retainedTaxes", "Impostos retidos", retainedTaxes, "danger")}
       </section>
 
       <section className="tax-grid">
@@ -2325,6 +2908,16 @@ function TaxView({ invoices }: { totals: ReturnType<typeof useFiscalStore>["tota
           <p className="summary-line">Base CFEM: {formatCurrency(cfemBase)}</p>
           <p className="summary-line">Alíquota CFEM: {fiscalConfig.cfemRate}%</p>
           <p className="summary-line">Valor a recolher: {formatCurrency(cfemDue)}</p>
+        </section>
+        <section className="panel tax-detail-card">
+          <h2>Impostos retidos</h2>
+          <p className="summary-line">Total retido no período: {formatCurrency(retainedTaxes)}</p>
+          <p className="summary-line">Notas com retenção: {retainedInvoices.length}</p>
+          {Object.entries(retainedByType).map(([label, value]) => (
+            <p className="summary-line" key={label}>
+              {label}: {formatCurrency(value)}
+            </p>
+          ))}
         </section>
       </section>
     </div>
@@ -2365,7 +2958,7 @@ function FinancialView({
   onBankBalanceSave,
 }: {
   invoices: Invoice[];
-  onSave: (invoice: Invoice) => void;
+  onSave: (invoice: Invoice) => boolean | void;
   bankBalanceValue: number;
   onBankBalanceSave: (value: number) => void;
 }) {
@@ -2440,16 +3033,16 @@ function FinancialView({
   const flow60 = currentBankBalance + flow60Parts.receive - flow60Parts.pay;
   const flow90 = currentBankBalance + flow90Parts.receive - flow90Parts.pay;
   const receiveFlowChart = [
-    { name: "Saldo atual", value: Math.max(currentBankBalance, 0), color: "#2563eb" },
-    { name: "30 dias", value: flow30Parts.receive, color: "#16a34a" },
-    { name: "60 dias", value: Math.max(flow60Parts.receive - flow30Parts.receive, 0), color: "#22c55e" },
-    { name: "90 dias", value: Math.max(flow90Parts.receive - flow60Parts.receive, 0), color: "#86efac" },
+    { name: "Saldo atual", value: chartValue(currentBankBalance), color: "#2563eb" },
+    { name: "30 dias", value: chartValue(flow30Parts.receive), color: "#16a34a" },
+    { name: "60 dias", value: chartValue(flow60Parts.receive - flow30Parts.receive), color: "#22c55e" },
+    { name: "90 dias", value: chartValue(flow90Parts.receive - flow60Parts.receive), color: "#86efac" },
   ];
   const payFlowChart = [
-    { name: "Saldo atual", value: Math.max(currentBankBalance, 0), color: "#2563eb" },
-    { name: "30 dias", value: flow30Parts.pay, color: "#dc2626" },
-    { name: "60 dias", value: Math.max(flow60Parts.pay - flow30Parts.pay, 0), color: "#f97316" },
-    { name: "90 dias", value: Math.max(flow90Parts.pay - flow60Parts.pay, 0), color: "#fdba74" },
+    { name: "Saldo atual", value: chartValue(currentBankBalance), color: "#2563eb" },
+    { name: "30 dias", value: chartValue(flow30Parts.pay), color: "#dc2626" },
+    { name: "60 dias", value: chartValue(flow60Parts.pay - flow30Parts.pay), color: "#f97316" },
+    { name: "90 dias", value: chartValue(flow90Parts.pay - flow60Parts.pay), color: "#fdba74" },
   ];
   const visiblePayables = listType === "receivable" ? [] : payables;
   const visibleReceivables = listType === "payable" ? [] : receivables;
@@ -2496,54 +3089,56 @@ function FinancialView({
     }
   };
   const renderRows = (items: FinancialEntry[], partyLabel: string, paymentDateLabel: string) => (
-    <table className="static-table">
-      <thead>
-        <tr>
-          <th>{partyLabel}</th>
-          <th>Vencimento</th>
-          <th>Portador</th>
-          <th>Valor</th>
-          <th>{paymentDateLabel}</th>
-          <th>Pago</th>
-          <th>Observações</th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((entry) => (
-          <tr key={entry.id}>
-            <td>{entry.invoice.partyName}</td>
-            <td>{formatDate(entry.installment.dueDate)}</td>
-            <td>{entry.installment.holder || "Itaú"}</td>
-            <td>{formatCurrency(installmentTotal(entry.installment))}</td>
-            <td>
-              <input
-                className="compact-input"
-                type="date"
-                value={paymentDates[entry.id] || entry.installment.paymentDate || today}
-                onChange={(event) => setPaymentDates((current) => ({ ...current, [entry.id]: event.target.value }))}
-              />
-            </td>
-            <td>
-              <input type="checkbox" checked={entry.installment.paid} onChange={() => (entry.installment.paid ? reopenPayment(entry) : markPaid(entry))} />
-            </td>
-            <td>
-              <input
-                className="compact-input"
-                value={financialNotes[entry.id] ?? entry.installment.notes ?? ""}
-                onChange={(event) => setFinancialNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
-                onBlur={() => saveFinancialNote(entry)}
-                placeholder="Livre"
-              />
-            </td>
-          </tr>
-        ))}
-        {!items.length && (
+    <div className="financial-table-scroll">
+      <table className="static-table financial-table">
+        <thead>
           <tr>
-            <td colSpan={7}>Nenhum lançamento no período.</td>
+            <th>{partyLabel}</th>
+            <th>Vencimento</th>
+            <th>Portador</th>
+            <th>Valor</th>
+            <th>{paymentDateLabel}</th>
+            <th>Pago</th>
+            <th>Observações</th>
           </tr>
-        )}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {items.map((entry) => (
+            <tr key={entry.id}>
+              <td>{entry.invoice.partyName}</td>
+              <td>{formatDate(entry.installment.dueDate)}</td>
+              <td>{entry.installment.holder || "Itaú"}</td>
+              <td>{formatCurrency(installmentTotal(entry.installment))}</td>
+              <td>
+                <input
+                  className="compact-input"
+                  type="date"
+                  value={paymentDates[entry.id] || entry.installment.paymentDate || today}
+                  onChange={(event) => setPaymentDates((current) => ({ ...current, [entry.id]: event.target.value }))}
+                />
+              </td>
+              <td>
+                <input type="checkbox" checked={entry.installment.paid} onChange={() => (entry.installment.paid ? reopenPayment(entry) : markPaid(entry))} />
+              </td>
+              <td>
+                <input
+                  className="compact-input"
+                  value={financialNotes[entry.id] ?? entry.installment.notes ?? ""}
+                  onChange={(event) => setFinancialNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
+                  onBlur={() => saveFinancialNote(entry)}
+                  placeholder="Livre"
+                />
+              </td>
+            </tr>
+          ))}
+          {!items.length && (
+            <tr>
+              <td colSpan={7}>Nenhum lançamento no período.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 
   return (
@@ -2609,11 +3204,11 @@ function FinancialView({
         <StatCard title="Fluxo 90 dias" value={formatCurrency(flow90)} tone={flow90 >= 0 ? "good" : "danger"} />
       </section>
       <section className="split-grid">
-        {!!visibleReceivables.length || listType !== "payable" ? <section className="panel">
+        {!!visibleReceivables.length || listType !== "payable" ? <section className="panel financial-list-panel">
           <h2>Contas a receber</h2>
           {renderRows(visibleReceivables, "Cliente", "Data de recebimento")}
         </section> : null}
-        {!!visiblePayables.length || listType !== "receivable" ? <section className="panel">
+        {!!visiblePayables.length || listType !== "receivable" ? <section className="panel financial-list-panel">
           <h2>Contas a pagar</h2>
           {renderRows(visiblePayables, "Fornecedor", "Data de pagamento")}
         </section> : null}
@@ -2635,7 +3230,7 @@ function BillFormView({
 }: {
   invoices: Invoice[];
   parties: Party[];
-  onSave: (invoice: Invoice) => void;
+  onSave: (invoice: Invoice) => boolean | void;
   onDelete: (id: string) => void;
   onAddParty: (kind: Party["kind"]) => void;
 }) {
@@ -2802,7 +3397,8 @@ function BillFormView({
       financialInstallments,
     };
 
-    onSave(invoice);
+    const saved = onSave(invoice);
+    if (saved === false) return;
     startNew();
   };
 
@@ -3494,11 +4090,12 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const receivedPfTotal = sum(received, (invoice) => Number(invoice.pfValue || 0));
   const profit = grossRevenue - taxes - costs - expenses;
   const dreChart = [
-    { name: "Impostos", value: Math.max(taxes, 0), color: "#dc2626" },
-    { name: "Custos", value: Math.max(costs, 0), color: "#f97316" },
-    { name: "Despesas", value: Math.max(expenses, 0), color: "#7c3aed" },
-    { name: "Lucro", value: Math.max(profit, 0), color: "#16a34a" },
+    { name: "Impostos", value: chartValue(taxes), color: "#dc2626" },
+    { name: "Custos", value: chartValue(costs), color: "#f97316" },
+    { name: "Despesas", value: chartValue(expenses), color: "#7c3aed" },
+    { name: "Lucro", value: chartValue(profit), color: "#16a34a" },
   ];
+  const dreChartData = dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }];
 
   return (
     <div className="view-stack">
@@ -3559,8 +4156,8 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
         <h2>DRE em gráfico</h2>
         <ResponsiveContainer width="100%" height={300}>
           <PieChart>
-            <Pie data={dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]} dataKey="value" nameKey="name" outerRadius={92}>
-              {(dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }]).map((entry) => (
+            <Pie data={dreChartData} dataKey="value" nameKey="name" outerRadius={92}>
+              {dreChartData.map((entry) => (
                 <Cell key={entry.name} fill={entry.color} />
               ))}
             </Pie>
@@ -3626,6 +4223,27 @@ function RegistrationsView({
 }) {
   const [showAdd, setShowAdd] = useState(Boolean(initialKind));
   const [addKind, setAddKind] = useState<Party["kind"]>(initialKind || "customer");
+  const [selectedKind, setSelectedKind] = useState<Party["kind"]>(initialKind || "customer");
+  const [searchField, setSearchField] = useState<"cnpj" | "name" | "city" | "state" | "email" | "phone">("name");
+  const [searchQuery, setSearchQuery] = useState("");
+  const partyKinds: Array<{ id: Party["kind"]; label: string }> = [
+    { id: "customer", label: "Clientes" },
+    { id: "supplier", label: "Fornecedores" },
+    { id: "carrier", label: "Transportadoras" },
+  ];
+  const searchFieldLabels = {
+    cnpj: "CNPJ/CPF",
+    name: "Razão social",
+    city: "Cidade",
+    state: "Estado",
+    email: "E-mail",
+    phone: "Telefone",
+  };
+  const filteredParties = registryParties.filter((party) => {
+    if (party.kind !== selectedKind) return false;
+    const value = String(party[searchField] || "");
+    return searchMatches(value, searchQuery);
+  });
 
   function addParty(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3697,9 +4315,44 @@ function RegistrationsView({
         </section>
       )}
 
-      {(["customer", "supplier", "carrier"] as const).map((kind) => (
-        <section className="panel" key={kind}>
-          <h2>{kind === "customer" ? "Clientes" : kind === "supplier" ? "Fornecedores" : "Transportadoras"}</h2>
+      <section className="panel registration-browser">
+        <div className="panel-title between">
+          <h2>Consultar cadastros</h2>
+          <span className="muted">{filteredParties.length} encontrado(s)</span>
+        </div>
+        <div className="registration-filter-grid">
+          <div className="kind-tabs">
+            {partyKinds.map((kind) => (
+              <button
+                key={kind.id}
+                className={selectedKind === kind.id ? "active" : ""}
+                type="button"
+                onClick={() => setSelectedKind(kind.id)}
+              >
+                {kind.label}
+              </button>
+            ))}
+          </div>
+          <label className="field">
+            <span>Buscar por</span>
+            <select value={searchField} onChange={(event) => setSearchField(event.target.value as typeof searchField)}>
+              {Object.entries(searchFieldLabels).map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field registration-search">
+            <span>Pesquisa</span>
+            <div>
+              <Search size={17} />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={`Digite ${searchFieldLabels[searchField].toLowerCase()}`}
+              />
+            </div>
+          </label>
+        </div>
           <div className="table-wrap">
             <table>
               <thead>
@@ -3716,8 +4369,7 @@ function RegistrationsView({
                 </tr>
               </thead>
               <tbody>
-                {registryParties
-                  .filter((party) => party.kind === kind)
+                {filteredParties
                   .map((party) => (
                     <tr key={party.id}>
                       <td>{party.name}</td>
@@ -3758,27 +4410,75 @@ function RegistrationsView({
                       )}
                     </tr>
                   ))}
+                {!filteredParties.length && (
+                  <tr>
+                    <td colSpan={canEdit ? 9 : 8}>Nenhum cadastro encontrado.</td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
-        </section>
-      ))}
+      </section>
     </div>
   );
 }
 
 function ProductsView({
+  invoices,
   products,
   onSave,
   onDelete,
   canEdit,
 }: {
+  invoices: Invoice[];
   products: ProductItem[];
   onSave: (product: ProductItem) => void;
   onDelete: (id: string) => void;
   canEdit: boolean;
 }) {
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
+  const autoRegisteredProducts = useRef(new Set<string>());
+  const issuedProductSuggestions = useMemo(() => {
+    const catalog = new Map<string, Omit<ProductItem, "id" | "createdAt" | "updatedAt">>();
+    invoices
+      .filter((invoice) => invoice.invoiceType === "issued")
+      .flatMap((invoice) => invoice.items || [])
+      .forEach((item) => {
+        const name = productLabel(item);
+        if (!name || name === "Produto sem descrição") return;
+        const ncm = onlyDigits(item.ncm);
+        const key = `${normalizeSearch(name)}|${ncm}`;
+        if (catalog.has(key)) return;
+        catalog.set(key, {
+          name,
+          ncm,
+          defaultCostCenter: item.costCenter || "",
+          defaultCategory: item.category || "",
+          defaultUnit: item.unit || "UN",
+          accountingAccount: "",
+          color: "",
+          active: true,
+        });
+      });
+    return Array.from(catalog.entries()).map(([key, product]) => ({ key, product }));
+  }, [invoices]);
+
+  useEffect(() => {
+    if (!canEdit || !issuedProductSuggestions.length) return;
+    const existingKeys = new Set(products.map((product) => `${normalizeSearch(product.name)}|${onlyDigits(product.ncm)}`));
+    issuedProductSuggestions.forEach(({ key, product }) => {
+      if (existingKeys.has(key) || autoRegisteredProducts.current.has(key)) return;
+      autoRegisteredProducts.current.add(key);
+      const now = new Date().toISOString();
+      const stableId = `prod_${key.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48)}`;
+      onSave({
+        id: stableId || newId("prod"),
+        ...product,
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  }, [canEdit, issuedProductSuggestions, onSave, products]);
 
   function saveProduct(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3793,8 +4493,8 @@ function ProductsView({
       defaultCostCenter: String(form.get("defaultCostCenter") || ""),
       defaultCategory: String(form.get("defaultCategory") || ""),
       defaultUnit: String(form.get("defaultUnit") || "UN"),
-      accountingAccount: String(form.get("accountingAccount") || ""),
-      color: String(form.get("color") || ""),
+      accountingAccount: "",
+      color: "",
       active: form.get("active") === "on",
       createdAt: editingProduct?.createdAt || now,
       updatedAt: now,
@@ -3808,7 +4508,7 @@ function ProductsView({
       <section className="panel add-registration-panel">
         <div>
           <h2>Cadastro de Produtos</h2>
-          <p className="muted">Produtos comprados usados nas notas recebidas, com padrões que podem ser ajustados no lançamento.</p>
+          <p className="muted">Produtos vendidos usados nas notas emitidas. Variações como medidas e blocos continuam no lançamento da nota.</p>
         </div>
       </section>
 
@@ -3828,8 +4528,6 @@ function ProductsView({
             <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
             <Field label="Categoria padrão" name="defaultCategory" options={fiscalConfig.categories} defaultValue={editingProduct?.defaultCategory || ""} />
             <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
-            <Field label="Conta contábil padrão" name="accountingAccount" defaultValue={editingProduct?.accountingAccount || ""} />
-            <Field label="Cor" name="color" defaultValue={editingProduct?.color || ""} sanitize="letters" />
             <label className="check align-end">
               <input name="active" type="checkbox" defaultChecked={editingProduct?.active ?? true} />
               Produto ativo
@@ -3854,8 +4552,6 @@ function ProductsView({
                 <th>Centro de custo padrão</th>
                 <th>Categoria</th>
                 <th>Unidade</th>
-                <th>Conta contábil</th>
-                <th>Cor</th>
                 <th>Ativo</th>
                 {canEdit && <th>Ações</th>}
               </tr>
@@ -3868,8 +4564,6 @@ function ProductsView({
                   <td>{product.defaultCostCenter}</td>
                   <td>{product.defaultCategory}</td>
                   <td>{product.defaultUnit}</td>
-                  <td>{product.accountingAccount}</td>
-                  <td>{product.color}</td>
                   <td>{product.active ? "Sim" : "Não"}</td>
                   {canEdit && (
                     <td>
@@ -3900,7 +4594,7 @@ function ProductsView({
               ))}
               {!products.length && (
                 <tr>
-                  <td colSpan={canEdit ? 9 : 8}>Nenhum produto cadastrado.</td>
+                  <td colSpan={canEdit ? 7 : 6}>Nenhum produto cadastrado.</td>
                 </tr>
               )}
             </tbody>
@@ -4318,6 +5012,71 @@ export default function App() {
     setEditingInvoice(null);
     setView("registrations");
   };
+  const blockedPeriodMessage = (period: string) =>
+    `A competência ${periodLabel(period)} está fechada. Desbloqueie a competência na Apuração Fiscal antes de alterar lançamentos desse período.`;
+  const ensurePeriodOpen = (period: string) => {
+    if (!isPeriodClosed(period)) return true;
+    window.alert(blockedPeriodMessage(period));
+    return false;
+  };
+  const guardedSaveInvoice = (invoice: Invoice) => {
+    const periods = new Set([invoicePeriodKey(invoice)]);
+    const previous = store.invoices.find((item) => item.id === invoice.id);
+    if (previous) periods.add(invoicePeriodKey(previous));
+    if (![...periods].every(ensurePeriodOpen)) return false;
+    store.saveInvoice(invoice);
+    return true;
+  };
+  const guardedDeleteInvoice = (id: string) => {
+    const invoice = store.invoices.find((item) => item.id === id);
+    if (invoice && !ensurePeriodOpen(invoicePeriodKey(invoice))) return;
+    store.deleteInvoice(id);
+  };
+  const guardedMarkInvoicePaid = (invoice: Invoice, paymentDate?: string) => {
+    if (!ensurePeriodOpen(invoicePeriodKey(invoice))) return;
+    store.markInvoicePaid(invoice, paymentDate);
+  };
+  const guardedSaveLinkedOperation = (operation: LinkedOperation) => {
+    const periods = new Set([operationPeriodKey(operation)]);
+    const previous = store.linkedOperations.find((item) => item.id === operation.id);
+    if (previous) periods.add(operationPeriodKey(previous));
+    if (![...periods].every(ensurePeriodOpen)) return;
+    store.saveLinkedOperation(operation);
+  };
+  const guardedDeleteLinkedOperation = (id: string) => {
+    const operation = store.linkedOperations.find((item) => item.id === id);
+    if (operation && !ensurePeriodOpen(operationPeriodKey(operation))) return;
+    store.deleteLinkedOperation(id);
+  };
+  const togglePeriodLock = async (period: string, close: boolean) => {
+    if (!period) return;
+    if (close) {
+      const periodInvoices = store.invoices.filter((invoice) => invoicePeriodKey(invoice) === period);
+      const financialInvoices = periodInvoices.filter(invoiceHasFinancialEffect);
+      const pendingCount =
+        financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+        periodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length +
+        periodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length +
+        financialInvoices.filter((invoice) => !invoiceHasHolder(invoice)).length;
+      if (pendingCount && !window.confirm(`Ainda existem ${pendingCount} pendência(s) na conferência de ${periodLabel(period)}. Deseja fechar mesmo assim?`)) return;
+    }
+    const message = close
+      ? `Tem certeza que deseja fechar a competência ${periodLabel(period)}? Os lançamentos desse período ficarão bloqueados para alteração.`
+      : `Tem certeza que deseja desbloquear a competência ${periodLabel(period)}?`;
+    if (!window.confirm(message)) return;
+
+    const previousClosedPeriods = { ...(fiscalConfig.closedPeriods || {}) };
+    const nextClosedPeriods = { ...previousClosedPeriods };
+    if (close) nextClosedPeriods[period] = todayIso();
+    else delete nextClosedPeriods[period];
+    fiscalConfig.closedPeriods = nextClosedPeriods;
+    setConfigVersion((current) => current + 1);
+    const saved = await saveFiscalConfig();
+    if (!saved) {
+      fiscalConfig.closedPeriods = previousClosedPeriods;
+      setConfigVersion((current) => current + 1);
+    }
+  };
   const saveBankBalance = async (value: number) => {
     fiscalConfig.bankBalance = value;
     setConfigVersion((current) => current + 1);
@@ -4405,8 +5164,8 @@ export default function App() {
               type="issued"
               invoices={store.invoices}
               onNew={() => openNewInvoice("new-issued")}
-              onPaid={store.markInvoicePaid}
-              onDelete={store.deleteInvoice}
+              onPaid={guardedMarkInvoicePaid}
+              onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
               canEdit={canEdit}
             />
@@ -4416,8 +5175,8 @@ export default function App() {
               type="received"
               invoices={store.invoices}
               onNew={() => openNewInvoice("new-received")}
-              onPaid={store.markInvoicePaid}
-              onDelete={store.deleteInvoice}
+              onPaid={guardedMarkInvoicePaid}
+              onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
               canEdit={canEdit}
             />
@@ -4430,10 +5189,10 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
-              canEdit={canEdit}
-              onSave={store.saveInvoice}
-              onDelete={store.deleteInvoice}
-              onOperation={store.saveLinkedOperation}
+              canEdit={canEdit && (!editingInvoice || !isPeriodClosed(invoicePeriodKey(editingInvoice)))}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOperation={guardedSaveLinkedOperation}
               onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
@@ -4449,10 +5208,10 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
-              canEdit={canEdit}
-              onSave={store.saveInvoice}
-              onDelete={store.deleteInvoice}
-              onOperation={store.saveLinkedOperation}
+              canEdit={canEdit && (!editingInvoice || !isPeriodClosed(invoicePeriodKey(editingInvoice)))}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOperation={guardedSaveLinkedOperation}
               onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
@@ -4460,13 +5219,14 @@ export default function App() {
               }}
             />
           )}
-          {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={store.saveLinkedOperation} onDelete={store.deleteLinkedOperation} canEdit={canEdit} />}
+          {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={guardedSaveLinkedOperation} onDelete={guardedDeleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
-          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} />}
+          {view === "conference" && <ConferenceView invoices={store.invoices} onOpen={openInvoiceForm} />}
+          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
           {view === "financial" && (
             <FinancialView
               invoices={store.invoices}
-              onSave={store.saveInvoice}
+              onSave={guardedSaveInvoice}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
             />
@@ -4475,8 +5235,8 @@ export default function App() {
             <BillFormView
               invoices={store.invoices}
               parties={registryParties}
-              onSave={store.saveInvoice}
-              onDelete={store.deleteInvoice}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
               onAddParty={openRegistration}
             />
           )}
@@ -4488,7 +5248,15 @@ export default function App() {
               onDeleteMovement={store.deleteCashMovement}
             />
           )}
-          {view === "products" && <ProductsView products={store.products} onSave={store.saveProduct} onDelete={store.deleteProduct} canEdit={canEdit} />}
+          {view === "products" && (
+            <ProductsView
+              invoices={store.invoices}
+              products={store.products}
+              onSave={store.saveProduct}
+              onDelete={store.deleteProduct}
+              canEdit={canEdit}
+            />
+          )}
           {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}

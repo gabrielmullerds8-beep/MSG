@@ -1,6 +1,7 @@
 export type InvoiceType = "issued" | "received";
 
 export type InvoiceStatus =
+  | "Faturada"
   | "Lancada"
   | "Pendente"
   | "Cancelada"
@@ -205,6 +206,7 @@ export interface FiscalConfig {
   cofinsRate: number;
   cfemRate: number;
   bankBalance?: number;
+  closedPeriods?: Record<string, string>;
   cfops: string[];
   cfopRules?: Record<string, CfopRule>;
   csts: string[];

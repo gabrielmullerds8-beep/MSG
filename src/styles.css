@@ -540,6 +540,74 @@ button {
   border-left: 4px solid var(--blue);
 }
 
+.tax-click-card {
+  position: relative;
+}
+
+.tax-card-button {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-height: 62px;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tax-card-button:hover strong {
+  color: var(--blue);
+}
+
+.tax-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 10px;
+  width: min(680px, calc(100vw - 260px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+
+.popover-title,
+.popover-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tax-popover-table {
+  max-height: 260px;
+  overflow: auto;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.tax-popover .static-table {
+  min-width: 560px;
+}
+
+.tax-popover .compact-table th,
+.tax-popover .compact-table td {
+  padding: 8px;
+  font-size: 12px;
+}
+
+.popover-total {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
 .stat-spacer {
   min-height: 92px;
 }
@@ -603,6 +671,32 @@ button {
   min-height: 330px;
 }
 
+.interactive-chart {
+  position: relative;
+  overflow: visible;
+}
+
+.chart-breakdown-panel {
+  position: absolute;
+  z-index: 25;
+  right: 18px;
+  top: 54px;
+  width: min(620px, calc(100% - 36px));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+
+.chart-breakdown-panel .tax-popover-table {
+  max-height: 230px;
+}
+
+.chart-breakdown-panel .static-table {
+  min-width: 520px;
+}
+
 .split-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -621,6 +715,41 @@ button {
   gap: 12px;
 }
 
+.period-lock-pill {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 14px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.period-lock-pill.open {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.period-lock-pill.closed {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.warning-list {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  padding: 10px 12px;
+  font-weight: 800;
+}
+
 .tax-detail-card {
   display: grid;
   gap: 8px;
@@ -635,6 +764,20 @@ button {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.conference-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.conference-panel {
+  min-height: 300px;
+}
+
+.conference-table {
+  max-height: 250px;
 }
 
 table {
@@ -720,6 +863,43 @@ tr:last-child td {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.subsection-label {
+  grid-column: 1 / -1;
+  margin-top: 6px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 12px;
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.form-grid .subsection-label:first-child {
+  margin-top: 0;
+  border-top: 0;
+  padding-top: 0;
+}
+
+.invoice-warnings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.invoice-warning {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  border: 1px solid #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .items-stack {
   display: grid;
   gap: 12px;
@@ -735,6 +915,60 @@ tr:last-child td {
 .item-card h3 {
   margin: 0;
   font-size: 15px;
+}
+
+.item-freight-demo {
+  display: contents;
+}
+
+.item-freight-demo input {
+  background: #f8fafc;
+  color: #475569;
+}
+
+.tax-control-list {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.tax-control-row {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.tax-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.tax-toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.tax-fields {
+  display: none;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+  margin-top: 10px;
+}
+
+.tax-control-row:has(.tax-toggle input:checked) .tax-fields {
+  display: grid;
+}
+
+.tax-credit {
+  min-height: 40px;
+  align-self: end;
 }
 
 .linked-note-box {
@@ -829,6 +1063,52 @@ tr:last-child td {
 .finance-pf-total strong {
   color: #0f172a;
   font-size: 18px;
+}
+
+.financial-list-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.financial-table-scroll {
+  height: 320px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+}
+
+.financial-table {
+  table-layout: fixed;
+}
+
+.financial-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+}
+
+.financial-table th:nth-child(1),
+.financial-table td:nth-child(1) {
+  width: 24%;
+}
+
+.financial-table th:nth-child(2),
+.financial-table td:nth-child(2),
+.financial-table th:nth-child(3),
+.financial-table td:nth-child(3),
+.financial-table th:nth-child(4),
+.financial-table td:nth-child(4),
+.financial-table th:nth-child(6),
+.financial-table td:nth-child(6) {
+  width: 11%;
+}
+
+.financial-table th:nth-child(5),
+.financial-table td:nth-child(5),
+.financial-table th:nth-child(7),
+.financial-table td:nth-child(7) {
+  width: 16%;
 }
 
 .cash-toolbar {
@@ -1150,6 +1430,64 @@ tr:last-child td {
   margin-bottom: 4px;
 }
 
+.registration-browser {
+  display: grid;
+  gap: 14px;
+}
+
+.registration-filter-grid {
+  display: grid;
+  grid-template-columns: minmax(360px, 1.2fr) minmax(180px, 0.45fr) minmax(280px, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.kind-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.kind-tabs button {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.kind-tabs button.active {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.registration-search div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  padding: 0 10px;
+}
+
+.registration-search svg {
+  color: #64748b;
+  flex: 0 0 auto;
+}
+
+.registration-search input {
+  border: 0;
+  padding-left: 0;
+}
+
+.registration-search input:focus {
+  outline: none;
+  box-shadow: none;
+}
+
 .add-card {
   width: 150px;
   min-height: 82px;
@@ -1320,6 +1658,10 @@ tr:last-child td {
   overflow: hidden;
 }
 
+.chart-card.interactive-chart {
+  overflow: visible;
+}
+
 .recharts-wrapper,
 .recharts-surface {
   max-width: 100%;
@@ -1400,6 +1742,7 @@ tr:last-child td {
   .tax-summary-grid,
   .detail-grid,
   .asset-card-grid,
+  .conference-grid,
   .triple-grid,
   .report-grid,
   .settings-list-grid,
@@ -1503,6 +1846,7 @@ tr:last-child td {
   .tax-summary-grid,
   .detail-grid,
   .asset-card-grid,
+  .conference-grid,
   .report-grid,
   .settings-list-grid,
   .item-totals-grid,
