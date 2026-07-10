@@ -2,10 +2,8 @@ export type InvoiceType = "issued" | "received";
 
 export type InvoiceStatus =
   | "Faturada"
-  | "Lancada"
   | "Pendente"
   | "Cancelada"
-  | "Aguardando XML"
   | "Em conferência";
 
 export type LinkedStatus =
@@ -52,9 +50,11 @@ export interface InvoiceItem {
   ibsBase?: number;
   ibsRate?: number;
   ibsValue?: number;
+  ibsCreditable?: boolean;
   cbsBase?: number;
   cbsRate?: number;
   cbsValue?: number;
+  cbsCreditable?: boolean;
   cfemRate: number;
   cfemValue: number;
   materialType?: string;
@@ -79,6 +79,18 @@ export interface PaymentInstallment {
   paid: boolean;
   paymentDate?: string;
   notes?: string;
+  conciled?: boolean;
+  discountValue?: number;
+  additionValue?: number;
+  settledValue?: number;
+  pfPaid?: boolean;
+  pfPaymentDate?: string;
+  pfNotes?: string;
+  pfConciled?: boolean;
+  pfHolder?: string;
+  pfDiscountValue?: number;
+  pfAdditionValue?: number;
+  pfSettledValue?: number;
 }
 
 export interface Invoice {
@@ -147,6 +159,7 @@ export interface Invoice {
 
 export interface ProductItem {
   id: string;
+  code: string;
   name: string;
   ncm: string;
   defaultCostCenter: string;
@@ -213,8 +226,13 @@ export interface FiscalConfig {
   ncms: string[];
   categories: string[];
   costCenters: string[];
+  operationTypes: string[];
   linkedTypes: string[];
   units?: string[];
+  paymentConditions?: string[];
+  paymentMethods?: string[];
+  holders?: string[];
+  financialCategories?: string[];
 }
 
 export interface CfopRule {
@@ -237,9 +255,41 @@ export interface AssetItem {
 
 export type CashMovementType = "entry" | "outflow" | "transfer";
 
+export type CheckStatus = "received" | "holding" | "passed" | "returned";
+
+export interface CheckMovement {
+  type: "received" | "holding" | "passed" | "returned";
+  date: string;
+  partyName: string;
+  notes?: string;
+}
+
+export interface CheckItem {
+  id: string;
+  checkNumber: string;
+  amount: number;
+  issuerName: string;
+  issuerDocument: string;
+  bank: string;
+  agency: string;
+  account: string;
+  dueDate: string;
+  receivedDate: string;
+  receivedFrom: string;
+  passedDate?: string;
+  passedTo?: string;
+  relatedInvoices: string[];
+  notes?: string;
+  status: CheckStatus;
+  movements: CheckMovement[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CashMovement {
   id: string;
   movementType: CashMovementType;
+  cashScope?: "normal" | "pf";
   date: string;
   holder: string;
   destinationHolder?: string;

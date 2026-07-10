@@ -18,6 +18,7 @@ import {
   Lock,
   LogOut,
   Menu,
+  MoreVertical,
   PackagePlus,
   Pencil,
   Plus,
@@ -57,7 +58,7 @@ import {
 } from "./data";
 import { useFiscalStore } from "./store";
 import { isSupabaseConfigured, supabase } from "./supabase";
-import { AssetItem, CashMovement, CashMovementType, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party, PaymentInstallment, ProductItem } from "./types";
+import { AssetItem, CashMovement, CashMovementType, CheckItem, CheckStatus, FiscalConfig, Invoice, InvoiceItem, InvoiceType, LinkedOperation, Party, PaymentInstallment, ProductItem } from "./types";
 
 type View =
   | "dashboard"
@@ -67,37 +68,42 @@ type View =
   | "new-received"
   | "linked"
   | "search"
-  | "conference"
   | "tax"
   | "financial"
+  | "financial-pf"
+  | "checks"
   | "bills"
+  | "closures"
   | "cash"
+  | "cash-pf"
   | "products"
   | "assets"
   | "dre"
-  | "reports"
   | "registrations"
+  | "conference"
   | "settings"
   | "backup";
 
 const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
-  { id: "issued", label: "Notas Emitidas", icon: FileOutput },
-  { id: "new-issued", label: "Nova Nota Emitida", icon: Plus },
-  { id: "received", label: "Notas Recebidas", icon: FileInput },
-  { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
-  { id: "linked", label: "Operações Vinculadas", icon: Link2 },
-  { id: "search", label: "Consulta Fiscal", icon: FileSearch },
-  { id: "conference", label: "Conferência", icon: AlertTriangle },
-  { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
-  { id: "financial", label: "Financeira", icon: Database },
-  { id: "bills", label: "Faturas", icon: Files },
+  { id: "financial", label: "Financeiro", icon: Database },
+  { id: "financial-pf", label: "Financeiro PF", icon: Database },
   { id: "cash", label: "Caixa", icon: Database },
-  { id: "products", label: "Produtos", icon: PackagePlus },
-  { id: "assets", label: "Patrimonial", icon: Building2 },
+  { id: "cash-pf", label: "Caixa PF", icon: Database },
+  { id: "checks", label: "Cheques", icon: CheckCircle2 },
   { id: "dre", label: "DRE", icon: BarChart3 },
-  { id: "reports", label: "Relatórios", icon: BarChart3 },
+  { id: "assets", label: "Patrimônio", icon: Building2 },
+  { id: "issued", label: "Notas Emitidas", icon: FileOutput },
+  { id: "received", label: "Notas Recebidas", icon: FileInput },
+  { id: "bills", label: "Faturas", icon: Files },
+  { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
+  { id: "closures", label: "Fechamentos", icon: Lock },
+  { id: "linked", label: "Operações Vinculadas", icon: Link2 },
+  { id: "new-issued", label: "Nova Nota Emitida", icon: Plus },
+  { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
   { id: "registrations", label: "Cadastros", icon: Building2 },
+  { id: "products", label: "Produtos", icon: PackagePlus },
+  { id: "conference", label: "Conferência", icon: AlertTriangle },
   { id: "settings", label: "Configurações", icon: Settings },
   { id: "backup", label: "Backup", icon: Database },
 ];
@@ -105,9 +111,17 @@ const views: Array<{ id: View; label: string; icon: any }> = [
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
 const unitOptions = ["UN", "KG", "TN", "MT", "PC", "SV"];
 const holderOptions = ["Itaú", "Sicredi", "Itaú Mailson"];
+const paymentConditionOptions = ["a prazo", "à vista", "sem pagamento"];
+const paymentMethodOptions = ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
 type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
-type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "linkedTypes" | "units">;
+type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories">;
+const configList = (list: string[] | undefined, fallback: string[]) => (list?.length ? list : fallback);
+const operationTypeOptions = ["Venda de Produção", "Devolução", "Remessa para Industrialização", "Remessa para Conserto", "Remessa para armazenagem"];
+const configuredHolders = () => configList(fiscalConfig.holders, holderOptions);
+const configuredPaymentConditions = () => configList(fiscalConfig.paymentConditions, paymentConditionOptions);
+const configuredPaymentMethods = () => configList(fiscalConfig.paymentMethods, paymentMethodOptions);
+const configuredOperationTypes = () => configList(fiscalConfig.operationTypes, operationTypeOptions);
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
@@ -118,8 +132,13 @@ const fiscalConfigSnapshot = (): FiscalConfig => ({
   ncms: [...fiscalConfig.ncms],
   categories: [...fiscalConfig.categories],
   costCenters: [...fiscalConfig.costCenters],
+  operationTypes: [...configuredOperationTypes()],
   linkedTypes: [...fiscalConfig.linkedTypes],
   units: [...(fiscalConfig.units || unitOptions)],
+  paymentConditions: [...configList(fiscalConfig.paymentConditions, paymentConditionOptions)],
+  paymentMethods: [...configList(fiscalConfig.paymentMethods, paymentMethodOptions)],
+  holders: [...configList(fiscalConfig.holders, holderOptions)],
+  financialCategories: [...configList(fiscalConfig.financialCategories, fiscalConfig.categories || [])],
 });
 
 const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
@@ -136,8 +155,13 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.ncms = mergeList(fiscalConfig.ncms, nextConfig.ncms);
   fiscalConfig.categories = mergeList(fiscalConfig.categories, nextConfig.categories);
   fiscalConfig.costCenters = mergeList(fiscalConfig.costCenters, nextConfig.costCenters);
+  fiscalConfig.operationTypes = mergeList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
   fiscalConfig.linkedTypes = mergeList(fiscalConfig.linkedTypes, nextConfig.linkedTypes);
   fiscalConfig.units = mergeList(fiscalConfig.units || unitOptions, nextConfig.units);
+  fiscalConfig.paymentConditions = mergeList(fiscalConfig.paymentConditions || paymentConditionOptions, nextConfig.paymentConditions);
+  fiscalConfig.paymentMethods = mergeList(fiscalConfig.paymentMethods || paymentMethodOptions, nextConfig.paymentMethods);
+  fiscalConfig.holders = mergeList(fiscalConfig.holders || holderOptions, nextConfig.holders);
+  fiscalConfig.financialCategories = mergeList(fiscalConfig.financialCategories || fiscalConfig.categories, nextConfig.financialCategories);
 };
 
 const saveFiscalConfig = async () => {
@@ -429,6 +453,24 @@ const invoiceInstallments = (invoice: Invoice): PaymentInstallment[] =>
 const installmentTotal = (installment: PaymentInstallment) =>
   Number(installment.amount || 0) + Number(installment.pfValue || 0);
 
+const invoiceHasPostedPayments = (invoice: Invoice) =>
+  invoiceInstallments(invoice).some((installment) => installment.paid || installment.pfPaid);
+
+const invoiceDataSnapshot = (invoice: Invoice) => {
+  const {
+    financialInstallments,
+    paid,
+    paymentDate,
+    dueDate,
+    paymentCondition,
+    paymentMethod,
+    pfValue,
+    updatedAt,
+    ...data
+  } = invoice;
+  return JSON.stringify(data);
+};
+
 const withinDateRange = (date: string | undefined, start: string, end: string) => {
   if (!date) return false;
   const value = date.slice(0, 10);
@@ -593,9 +635,11 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     ibsBase,
     ibsRate,
     ibsValue,
+    ibsCreditable: invoiceType === "received" && ibsEnabled && form.get(`ibsCreditable${suffix}`) === "on",
     cbsBase,
     cbsRate,
     cbsValue,
+    cbsCreditable: invoiceType === "received" && cbsEnabled && form.get(`cbsCreditable${suffix}`) === "on",
     cfemRate: invoiceType === "issued" ? fiscalConfig.cfemRate : 0,
     cfemValue: invoiceType === "issued" ? cfemBase * (fiscalConfig.cfemRate / 100) : 0,
     materialType: String(form.get(`materialType${suffix}`) || ""),
@@ -610,6 +654,7 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
 
 function Badge({ value }: { value: string }) {
   const kind = value.includes("Cancelada")
+    || value.includes("Devolvido")
     ? "danger"
     : value.includes("Pendente") || value.includes("Aberta")
       ? "warn"
@@ -1371,15 +1416,12 @@ function InvoiceRows({
     <table>
       <thead>
         <tr>
-          <th>N° NF-e</th>
           <th>Data</th>
+          <th>N° NF-e</th>
           <th>{compact ? "Fornecedor" : "Cliente/Fornecedor"}</th>
           <th>CFOP</th>
-          {!compact && <th>NCM</th>}
           <th>Valor total</th>
           {showPfValue && <th>Valor PF</th>}
-          <th>ICMS</th>
-          <th>Triang.</th>
           <th>Status</th>
           {actions && <th>Ações</th>}
         </tr>
@@ -1387,15 +1429,12 @@ function InvoiceRows({
       <tbody>
         {invoices.map((invoice) => (
           <tr key={invoice.id}>
+            <td>{formatDate(invoice.issueDate)}</td>
             <td>{invoice.invoiceNumber}</td>
-            <td>{formatDate(invoice.entryDate || invoice.issueDate)}</td>
             <td>{invoice.partyName}</td>
             <td>{invoice.mainCfop}</td>
-            {!compact && <td>{invoice.items[0]?.ncm}</td>}
             <td>{formatCurrency(invoice.totalInvoice)}</td>
             {showPfValue && <td>{formatCurrency(invoice.pfValue || 0)}</td>}
-            <td>{formatCurrency(invoice.invoiceType === "received" ? invoice.icmsCreditValue : invoice.icmsValue)}</td>
-            <td>{invoice.hasLinkedOperation ? "Sim" : "Não"}</td>
             <td>
               <Badge value={invoice.status} />
             </td>
@@ -1516,7 +1555,6 @@ function InvoiceList({
   type,
   invoices,
   onNew,
-  onPaid,
   onDelete,
   onOpen,
   canEdit,
@@ -1524,7 +1562,6 @@ function InvoiceList({
   type: InvoiceType;
   invoices: Invoice[];
   onNew: () => void;
-  onPaid: (invoice: Invoice) => void;
   onDelete: (id: string) => void;
   onOpen: (invoice: Invoice) => void;
   canEdit: boolean;
@@ -1617,11 +1654,6 @@ function InvoiceList({
                 <button className="icon-btn" title="Visualizar" onClick={() => onOpen(invoice)}>
                   <Search size={16} />
                 </button>
-                {canEdit && type === "received" && !invoice.paid && (
-                  <button className="icon-btn" title="Marcar como paga" onClick={() => window.confirm("Tem certeza que deseja marcar esta nota como paga?") && onPaid(invoice)}>
-                    <CheckCircle2 size={16} />
-                  </button>
-                )}
                 {canEdit && (
                   <>
                     <button
@@ -1938,8 +1970,8 @@ function InvoiceForm({
     const financialInstallments = rawInstallments.map((installment, index) => ({
       ...installment,
       amount: rawInstallments.length === 1 && installment.amount === 0 ? totalInvoice : installment.amount,
-      paymentCondition: installment.paymentCondition || (index === 0 ? editingInvoice?.paymentCondition || "A prazo" : "A prazo"),
-      paymentMethod: installment.paymentMethod || (index === 0 ? editingInvoice?.paymentMethod || "Boleto" : "Boleto"),
+      paymentCondition: installment.paymentCondition || (index === 0 ? editingInvoice?.paymentCondition || "a prazo" : "a prazo"),
+      paymentMethod: installment.paymentMethod || (index === 0 ? editingInvoice?.paymentMethod || "boleto" : "boleto"),
       holder: installment.holder || "Itaú",
     }));
     const firstInstallment = financialInstallments[0];
@@ -2105,7 +2137,7 @@ function InvoiceForm({
         </div>
         {isEditing && !canEdit && (
           <div className="warning-list">
-            <span>Este lançamento pertence a uma competência fechada. Desbloqueie o período na Apuração Fiscal para alterar.</span>
+            <span>Este lançamento pertence a uma competência fechada. Desbloqueie o período em Fechamentos para alterar.</span>
           </div>
         )}
         <div className="form-grid">
@@ -2151,10 +2183,15 @@ function InvoiceForm({
               ))}
             </select>
           </label>
-          <Field label="Tipo de operação" name="operationType" defaultValue={editingInvoice?.operationType || (isServiceReceived ? "Serviço tomado" : isFreightDocument ? "Conhecimento de frete" : isReceived ? "Compra para uso e consumo" : "Venda de produção")} />
+          <Field
+            label="Tipo de operação"
+            name="operationType"
+            options={Array.from(new Set([...(editingInvoice?.operationType ? [editingInvoice.operationType] : []), ...configuredOperationTypes()]))}
+            defaultValue={editingInvoice?.operationType || configuredOperationTypes()[0] || ""}
+          />
           <label className="field">
             <span>Status</span>
-            <select name="status" defaultValue={editingInvoice?.status === "Lancada" ? "Faturada" : editingInvoice?.status || "Faturada"}>
+            <select name="status" defaultValue={editingInvoice?.status || "Faturada"}>
               {["Faturada", "Pendente", "Cancelada", "Em conferência"].map((status) => (
                 <option key={status}>{status}</option>
               ))}
@@ -2313,6 +2350,9 @@ function InvoiceForm({
                     rateValue={existingItem?.ibsRate || 0}
                     valueName={`ibsValue_${itemIndex}`}
                     valueValue={formatCurrency(existingItem?.ibsValue || 0)}
+                    creditName={`ibsCreditable_${itemIndex}`}
+                    creditDefault={existingItem?.ibsCreditable ?? true}
+                    showCredit={isReceived}
                   />
                   <TaxControl
                     title="CBS"
@@ -2324,6 +2364,9 @@ function InvoiceForm({
                     rateValue={existingItem?.cbsRate || 0}
                     valueName={`cbsValue_${itemIndex}`}
                     valueValue={formatCurrency(existingItem?.cbsValue || 0)}
+                    creditName={`cbsCreditable_${itemIndex}`}
+                    creditDefault={existingItem?.cbsCreditable ?? true}
+                    showCredit={isReceived}
                   />
                 </div>
                 {!isReceived && <div className="subsection-label">Dados do bloco</div>}
@@ -2456,9 +2499,9 @@ function InvoiceForm({
               return (
                 <article className="installment-row" key={installmentIndex}>
                   <strong>Parcela {position + 1}</strong>
-                  <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} defaultValue={installment?.paymentCondition || editingInvoice?.paymentCondition || "A prazo"} />
-                  <Field label="Meio de pagamento" name={`paymentMethod_${installmentIndex}`} defaultValue={installment?.paymentMethod || editingInvoice?.paymentMethod || "Boleto"} />
-                  <Field label="Portador" name={`holder_${installmentIndex}`} options={holderOptions} defaultValue={installment?.holder || "Itaú"} />
+                  <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} options={configuredPaymentConditions()} defaultValue={installment?.paymentCondition || editingInvoice?.paymentCondition || "a prazo"} />
+                  <Field label="Meio de pagamento" name={`paymentMethod_${installmentIndex}`} options={configuredPaymentMethods()} defaultValue={installment?.paymentMethod || editingInvoice?.paymentMethod || "boleto"} />
+                  <Field label="Portador" name={`holder_${installmentIndex}`} options={configuredHolders()} defaultValue={installment?.holder || "Itaú"} />
                   <Field label="Vencimento" name={`dueDate_${installmentIndex}`} type="date" defaultValue={installment?.dueDate || editingInvoice?.dueDate || ""} />
                   <MoneyField label="Valor da parcela" name={`installmentAmount_${installmentIndex}`} defaultValue={formatCurrency(installment?.amount || (position === 0 ? editingInvoice?.totalInvoice || 0 : 0))} autoCalc />
                   <MoneyField label="Valor PF" name={`installmentPfValue_${installmentIndex}`} defaultValue={formatCurrency(installment?.pfValue || (position === 0 && !editingInvoice?.financialInstallments?.length ? editingInvoice?.pfValue || 0 : 0))} autoCalc />
@@ -2951,16 +2994,123 @@ function TaxDetailCard({
   );
 }
 
+function ClosuresView({
+  invoices,
+  closedPeriods,
+  onTogglePeriodLock,
+}: {
+  invoices: Invoice[];
+  closedPeriods: Record<string, string>;
+  onTogglePeriodLock: (period: string, close: boolean) => void;
+}) {
+  const today = todayIso();
+  const currentPeriod = today.slice(0, 7);
+  const [period, setPeriod] = useState(currentPeriod);
+  const periods = Array.from(new Set([
+    currentPeriod,
+    ...invoices.map(invoicePeriodKey).filter(Boolean),
+    ...Object.keys(closedPeriods || {}),
+  ])).sort((a, b) => b.localeCompare(a));
+  const periodInvoices = invoices.filter((invoice) => invoicePeriodKey(invoice) === period);
+  const closedAt = closedPeriods?.[period];
+  const financialInvoices = periodInvoices.filter(invoiceHasFinancialEffect);
+  const pendingCostCenter = financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length;
+  const pendingCfop = periodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length;
+  const pendingLinks = periodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
+  const pendingHolders = periodInvoices.filter((invoice) =>
+    invoiceInstallments(invoice).some((installment) => !installment.holder),
+  ).length;
+  const pendingTotal = pendingCostCenter + pendingCfop + pendingLinks + pendingHolders;
+
+  return (
+    <div className="view-stack">
+      <section className="toolbar">
+        <div className="filters">
+          <label className="field">
+            <span>Competência</span>
+            <input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Status</span>
+            <input value={closedAt ? `Fechada em ${formatDate(closedAt)}` : "Aberta"} readOnly />
+          </label>
+        </div>
+        <div className="toolbar-actions">
+          <ActionButton icon={Lock} variant={closedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !closedAt)}>
+            {closedAt ? "Desbloquear mês" : "Fechar mês"}
+          </ActionButton>
+        </div>
+      </section>
+
+      <section className="stats-grid">
+        <StatCard title="Notas no período" value={String(periodInvoices.length)} tone="info" />
+        <StatCard title="Pendências de conferência" value={String(pendingTotal)} tone={pendingTotal ? "warn" : "good"} />
+        <StatCard title="Notas sem centro de custo" value={String(pendingCostCenter)} tone={pendingCostCenter ? "warn" : "good"} />
+        <StatCard title="CFOP sem configuração" value={String(pendingCfop)} tone={pendingCfop ? "warn" : "good"} />
+        <StatCard title="Vínculos pendentes" value={String(pendingLinks)} tone={pendingLinks ? "warn" : "good"} />
+        <StatCard title="Lançamentos sem portador" value={String(pendingHolders)} tone={pendingHolders ? "warn" : "good"} />
+      </section>
+
+      <section className="panel">
+        <h2>Competências</h2>
+        <div className="table-wrap">
+          <table className="static-table">
+            <thead>
+              <tr>
+                <th>Competência</th>
+                <th>Status</th>
+                <th>Notas</th>
+                <th>Pendências</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {periods.map((item) => {
+                const rows = invoices.filter((invoice) => invoicePeriodKey(invoice) === item);
+                const pending =
+                  rows.filter(invoiceHasFinancialEffect).filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+                  rows.filter((invoice) => !cfopIsConfigured(invoice)).length +
+                  rows.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length +
+                  rows.filter((invoice) => invoiceInstallments(invoice).some((installment) => !installment.holder)).length;
+                const itemClosedAt = closedPeriods?.[item];
+                return (
+                  <tr key={item}>
+                    <td>{periodLabel(item)}</td>
+                    <td><Badge value={itemClosedAt ? "Fechada" : "Aberta"} /></td>
+                    <td>{rows.length}</td>
+                    <td>{pending}</td>
+                    <td>
+                      <button className="btn ghost" type="button" onClick={() => onTogglePeriodLock(item, !itemClosedAt)}>
+                        {itemClosedAt ? "Desbloquear" : "Fechar"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function FinancialView({
   invoices,
   onSave,
+  onDelete,
+  onOpenInvoice,
   bankBalanceValue,
   onBankBalanceSave,
+  mode = "normal",
 }: {
   invoices: Invoice[];
   onSave: (invoice: Invoice) => boolean | void;
+  onDelete: (id: string) => void;
+  onOpenInvoice: (invoice: Invoice) => void;
   bankBalanceValue: number;
   onBankBalanceSave: (value: number) => void;
+  mode?: "normal" | "pf";
 }) {
   const today = todayIso();
   const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
@@ -2971,6 +3121,10 @@ function FinancialView({
   const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
+  const [settlementEntry, setSettlementEntry] = useState<FinancialEntry | null>(null);
+  const [settlementHolder, setSettlementHolder] = useState("Itaú");
+  const [settlementDiscount, setSettlementDiscount] = useState("R$ 0,00");
+  const [settlementAddition, setSettlementAddition] = useState("R$ 0,00");
   useEffect(() => {
     setBankBalance(formatCurrency(bankBalanceValue));
   }, [bankBalanceValue]);
@@ -2988,7 +3142,21 @@ function FinancialView({
     invoice: Invoice;
     installment: PaymentInstallment;
     kind: "receivable" | "payable";
+    position: number;
+    totalInstallments: number;
   };
+  const entryAmount = (entry: FinancialEntry) =>
+    mode === "pf" ? Number(entry.installment.pfValue || 0) : Number(entry.installment.amount || 0);
+  const entryPaid = (entry: FinancialEntry) =>
+    mode === "pf" ? Boolean(entry.installment.pfPaid) : Boolean(entry.installment.paid);
+  const entryPaymentDate = (entry: FinancialEntry) =>
+    mode === "pf" ? entry.installment.pfPaymentDate : entry.installment.paymentDate;
+  const entryNotes = (entry: FinancialEntry) =>
+    mode === "pf" ? entry.installment.pfNotes || entry.installment.notes : entry.installment.notes;
+  const entryConciled = (entry: FinancialEntry) =>
+    mode === "pf" ? Boolean(entry.installment.pfConciled) : Boolean(entry.installment.conciled);
+  const entryHolder = (entry: FinancialEntry) =>
+    mode === "pf" ? entry.installment.pfHolder || entry.installment.holder || "Itaú" : entry.installment.holder || "Itaú";
   const allEntries = invoices.flatMap((invoice) => {
     const kind: FinancialEntry["kind"] | null = billFinancialKind(invoice) || (invoiceConsidersSale(invoice)
       ? "receivable"
@@ -2996,31 +3164,40 @@ function FinancialView({
         ? "payable"
         : null);
     if (!kind) return [];
-    return invoiceInstallments(invoice).map((installment) => ({
-      id: `${invoice.id}_${installment.id}`,
-      invoice,
-      installment,
-      kind,
-    }));
+    const installments = invoiceInstallments(invoice);
+    return installments
+      .map((installment, index) => ({
+        id: `${invoice.id}_${installment.id}_${mode}`,
+        invoice,
+        installment,
+        kind,
+        position: index + 1,
+        totalInstallments: installments.length,
+      }))
+      .filter((entry) => entryAmount(entry) > 0);
   });
   const byEntryPeriod = (entry: FinancialEntry) =>
     (!startDate || entry.installment.dueDate >= startDate) && (!endDate || entry.installment.dueDate <= endDate);
   const byEntryStatus = (entry: FinancialEntry) => {
-    if (statusFilter === "paid") return entry.installment.paid;
-    if (statusFilter === "open") return !entry.installment.paid;
+    if (statusFilter === "paid") return entryPaid(entry);
+    if (statusFilter === "open") return !entryPaid(entry);
     return true;
   };
   const byEntryHolder = (entry: FinancialEntry) =>
-    holderFilter === "all" || (entry.installment.holder || "Itaú") === holderFilter;
-  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry));
-  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry));
-  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entry.installment.paid && byEntryPeriod(entry) && byEntryHolder(entry));
-  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entry.installment.paid && byEntryPeriod(entry) && byEntryHolder(entry));
+    holderFilter === "all" || entryHolder(entry) === holderFilter;
+  const byDueDate = (a: FinancialEntry, b: FinancialEntry) =>
+    a.installment.dueDate.localeCompare(b.installment.dueDate) ||
+    a.invoice.partyName.localeCompare(b.invoice.partyName) ||
+    a.invoice.invoiceNumber.localeCompare(b.invoice.invoiceNumber);
+  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
+  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
+  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
+  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
   const inRange = (entry: FinancialEntry, days: number) => {
     const dueDate = entry.installment.dueDate;
     return dueDate >= today && dueDate <= addDays(days);
   };
-  const sumTotal = (items: FinancialEntry[]) => items.reduce((total, entry) => total + installmentTotal(entry.installment), 0);
+  const sumTotal = (items: FinancialEntry[]) => items.reduce((total, entry) => total + entryAmount(entry), 0);
   const flowParts = (days: number) => ({
     receive: sumTotal(openReceivables.filter((invoice) => inRange(invoice, days))),
     pay: sumTotal(openPayables.filter((invoice) => inRange(invoice, days))),
@@ -3063,77 +3240,119 @@ function FinancialView({
       updatedAt: new Date().toISOString(),
     });
   };
-  const markPaid = (entry: FinancialEntry) => {
+  const openSettlement = (entry: FinancialEntry) => {
+    setPaymentDates((current) => ({ ...current, [entry.id]: current[entry.id] || entryPaymentDate(entry) || today }));
+    setFinancialNotes((current) => ({ ...current, [entry.id]: current[entry.id] ?? entryNotes(entry) ?? "" }));
+    setSettlementHolder(entryHolder(entry));
+    setSettlementDiscount(formatCurrency(mode === "pf" ? entry.installment.pfDiscountValue || 0 : entry.installment.discountValue || 0));
+    setSettlementAddition(formatCurrency(mode === "pf" ? entry.installment.pfAdditionValue || 0 : entry.installment.additionValue || 0));
+    setSettlementEntry(entry);
+  };
+  const saveSettlement = (entry: FinancialEntry) => {
     const paymentDate = paymentDates[entry.id] || today;
-    if (window.confirm("Tem certeza que deseja marcar este lançamento como pago?")) {
-      updateInstallment(entry, {
-        paid: true,
-        paymentDate,
-        notes: financialNotes[entry.id] ?? entry.installment.notes,
-      });
-    }
+    const notes = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
+    const discountValue = cleanNumber(settlementDiscount);
+    const additionValue = cleanNumber(settlementAddition);
+    const settledValue = Math.max(entryAmount(entry) - discountValue + additionValue, 0);
+    if (!window.confirm(`Confirmar ${entry.kind === "receivable" ? "recebimento" : "pagamento"} deste lançamento?`)) return;
+    updateInstallment(entry, mode === "pf"
+      ? {
+          pfPaid: true,
+          pfPaymentDate: paymentDate,
+          pfNotes: notes,
+          pfDiscountValue: discountValue,
+          pfAdditionValue: additionValue,
+          pfSettledValue: settledValue,
+          pfHolder: settlementHolder,
+        }
+      : {
+          paid: true,
+          paymentDate,
+          notes,
+          discountValue,
+          additionValue,
+          settledValue,
+          holder: settlementHolder,
+        });
+    setSettlementEntry(null);
   };
   const reopenPayment = (entry: FinancialEntry) => {
     if (window.confirm("Tem certeza que deseja remover o pagamento deste lançamento?")) {
-      updateInstallment(entry, {
-        paid: false,
-        paymentDate: "",
-        notes: financialNotes[entry.id] ?? entry.installment.notes,
-      });
+      updateInstallment(entry, mode === "pf"
+        ? {
+            pfPaid: false,
+            pfPaymentDate: "",
+            pfConciled: false,
+            pfNotes: financialNotes[entry.id] ?? entryNotes(entry),
+          }
+        : {
+            paid: false,
+            paymentDate: "",
+            conciled: false,
+            notes: financialNotes[entry.id] ?? entryNotes(entry),
+          });
     }
   };
   const saveFinancialNote = (entry: FinancialEntry) => {
-    const note = financialNotes[entry.id] ?? entry.installment.notes ?? "";
-    if (note !== (entry.installment.notes || "")) {
-      updateInstallment(entry, { notes: note });
+    const note = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
+    if (note !== (entryNotes(entry) || "")) {
+      updateInstallment(entry, mode === "pf" ? { pfNotes: note } : { notes: note });
     }
   };
-  const renderRows = (items: FinancialEntry[], partyLabel: string, paymentDateLabel: string) => (
+  const toggleConciled = (entry: FinancialEntry) => {
+    updateInstallment(entry, mode === "pf" ? { pfConciled: !entryConciled(entry) } : { conciled: !entryConciled(entry) });
+  };
+  const renderRows = (items: FinancialEntry[], partyLabel: string) => (
     <div className="financial-table-scroll">
       <table className="static-table financial-table">
         <thead>
           <tr>
+            <th>Data</th>
+            <th>Categorias financeiras</th>
             <th>{partyLabel}</th>
-            <th>Vencimento</th>
-            <th>Portador</th>
-            <th>Valor</th>
-            <th>{paymentDateLabel}</th>
+            <th>Nota fiscal</th>
+            <th>Observações / Descrição</th>
+            <th>Parcela</th>
+            <th>Valor (R$)</th>
             <th>Pago</th>
-            <th>Observações</th>
+            <th>Conciliado</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          {items.map((entry) => (
-            <tr key={entry.id}>
-              <td>{entry.invoice.partyName}</td>
+          {items.map((entry) => {
+            const amount = entryAmount(entry);
+            const rowTone = entry.kind === "payable" ? "finance-row-payable" : "finance-row-receivable";
+            const description = entryNotes(entry) || entry.invoice.additionalInfo || entry.invoice.items?.[0]?.description || "-";
+            return (
+            <tr key={entry.id} className={rowTone}>
               <td>{formatDate(entry.installment.dueDate)}</td>
-              <td>{entry.installment.holder || "Itaú"}</td>
-              <td>{formatCurrency(installmentTotal(entry.installment))}</td>
+              <td>{entry.invoice.category || entry.invoice.costCenter || entry.invoice.items?.[0]?.category || "-"}</td>
+              <td>{entry.invoice.partyName}</td>
+              <td>{entry.invoice.invoiceNumber || "-"}</td>
+              <td>{description}</td>
+              <td>{entry.position}/{entry.totalInstallments}</td>
+              <td className={entry.kind === "payable" ? "money-negative" : "money-positive"}>{formatCurrency(amount)}</td>
               <td>
-                <input
-                  className="compact-input"
-                  type="date"
-                  value={paymentDates[entry.id] || entry.installment.paymentDate || today}
-                  onChange={(event) => setPaymentDates((current) => ({ ...current, [entry.id]: event.target.value }))}
-                />
+                <input type="checkbox" checked={entryPaid(entry)} onChange={() => (entryPaid(entry) ? reopenPayment(entry) : openSettlement(entry))} />
               </td>
               <td>
-                <input type="checkbox" checked={entry.installment.paid} onChange={() => (entry.installment.paid ? reopenPayment(entry) : markPaid(entry))} />
+                <input type="checkbox" checked={entryConciled(entry)} onChange={() => toggleConciled(entry)} />
               </td>
               <td>
-                <input
-                  className="compact-input"
-                  value={financialNotes[entry.id] ?? entry.installment.notes ?? ""}
-                  onChange={(event) => setFinancialNotes((current) => ({ ...current, [entry.id]: event.target.value }))}
-                  onBlur={() => saveFinancialNote(entry)}
-                  placeholder="Livre"
-                />
+                <details className="row-menu">
+                  <summary title="Ações"><MoreVertical size={16} /></summary>
+                  <button type="button" onClick={() => onOpenInvoice(entry.invoice)}>Visualizar</button>
+                  <button type="button" onClick={() => onOpenInvoice(entry.invoice)}>Editar</button>
+                  <button type="button" onClick={() => window.confirm("Tem certeza que deseja excluir este lançamento?") && onDelete(entry.invoice.id)}>Excluir</button>
+                </details>
               </td>
             </tr>
-          ))}
+            );
+          })}
           {!items.length && (
             <tr>
-              <td colSpan={7}>Nenhum lançamento no período.</td>
+              <td colSpan={10}>Nenhum lançamento no período.</td>
             </tr>
           )}
         </tbody>
@@ -3173,7 +3392,7 @@ function FinancialView({
             <span>Portador</span>
             <select value={holderFilter} onChange={(event) => setHolderFilter(event.target.value)}>
               <option value="all">Todos</option>
-              {holderOptions.map((holder) => (
+              {configuredHolders().map((holder) => (
                 <option key={holder} value={holder}>{holder}</option>
               ))}
             </select>
@@ -3181,8 +3400,8 @@ function FinancialView({
         </div>
       </section>
       <section className="stats-grid">
-        <StatCard title="Total contas a receber" value={formatCurrency(sumTotal(openReceivables))} tone="good" />
-        <StatCard title="Total contas a pagar" value={formatCurrency(sumTotal(openPayables))} tone="danger" />
+        <StatCard title={mode === "pf" ? "Total PF a receber" : "Total contas a receber"} value={formatCurrency(sumTotal(openReceivables))} tone="good" />
+        <StatCard title={mode === "pf" ? "Total PF a pagar" : "Total contas a pagar"} value={formatCurrency(sumTotal(openPayables))} tone="danger" />
         <section className="stat info bank-balance-card">
           <span>Saldo bancário atual</span>
           <input
@@ -3206,16 +3425,391 @@ function FinancialView({
       <section className="split-grid">
         {!!visibleReceivables.length || listType !== "payable" ? <section className="panel financial-list-panel">
           <h2>Contas a receber</h2>
-          {renderRows(visibleReceivables, "Cliente", "Data de recebimento")}
+          {renderRows(visibleReceivables, "Cliente")}
         </section> : null}
         {!!visiblePayables.length || listType !== "receivable" ? <section className="panel financial-list-panel">
           <h2>Contas a pagar</h2>
-          {renderRows(visiblePayables, "Fornecedor", "Data de pagamento")}
+          {renderRows(visiblePayables, "Fornecedor")}
         </section> : null}
       </section>
       <section className="split-grid">
         <FinancePie title="Fluxo a receber" data={receiveFlowChart} />
         <FinancePie title="Fluxo a pagar" data={payFlowChart} />
+      </section>
+      {settlementEntry && (
+        <div className="modal-backdrop">
+          <section className="settlement-modal">
+            <h2>{settlementEntry.kind === "receivable" ? "Recebimento" : "Pagamento"}</h2>
+            <div className="settlement-grid">
+              <label className="field">
+                <span>Vencimento *</span>
+                <input type="date" value={settlementEntry.installment.dueDate} readOnly />
+              </label>
+              <label className="field">
+                <span>Valor (R$)</span>
+                <input value={formatCurrency(entryAmount(settlementEntry))} readOnly />
+              </label>
+              <label className="field wide">
+                <span>Observações</span>
+                <input
+                  maxLength={100}
+                  value={financialNotes[settlementEntry.id] ?? entryNotes(settlementEntry) ?? ""}
+                  onChange={(event) => setFinancialNotes((current) => ({ ...current, [settlementEntry.id]: event.target.value }))}
+                />
+              </label>
+              <label className="switch-line wide">
+                <input type="checkbox" checked readOnly />
+                {settlementEntry.kind === "receivable" ? "Recebido" : "Pago"}
+              </label>
+              <label className="field">
+                <span>{settlementEntry.kind === "receivable" ? "Recebimento" : "Pagamento"}</span>
+                <input
+                  type="date"
+                  value={paymentDates[settlementEntry.id] || entryPaymentDate(settlementEntry) || today}
+                  onChange={(event) => setPaymentDates((current) => ({ ...current, [settlementEntry.id]: event.target.value }))}
+                />
+              </label>
+              <label className="field">
+                <span>Conta bancária</span>
+                <select value={settlementHolder} onChange={(event) => setSettlementHolder(event.target.value)}>
+                  {configuredHolders().map((holder) => (
+                    <option key={holder} value={holder}>{holder}</option>
+                  ))}
+                </select>
+              </label>
+              <MoneyField label="Descontos (R$)" name="settlementDiscount" defaultValue={settlementDiscount} onChangeValue={setSettlementDiscount} />
+              <MoneyField label="Acréscimos (R$)" name="settlementAddition" defaultValue={settlementAddition} onChangeValue={setSettlementAddition} />
+              <label className="field wide settlement-total">
+                <span>Valor (R$)</span>
+                <input value={formatCurrency(Math.max(entryAmount(settlementEntry) - cleanNumber(settlementDiscount) + cleanNumber(settlementAddition), 0))} readOnly />
+              </label>
+            </div>
+            <div className="form-actions inline settlement-actions">
+              <button className="btn ghost" type="button" onClick={() => setSettlementEntry(null)}>Cancelar</button>
+              <ActionButton icon={Save} onClick={() => saveSettlement(settlementEntry)}>Salvar</ActionButton>
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const checkStatusLabel = (status: CheckStatus) => {
+  if (status === "received") return "Recebido";
+  if (status === "holding") return "Em posse";
+  if (status === "passed") return "Repassado";
+  return "Devolvido";
+};
+
+function ChecksView({
+  checks,
+  onSave,
+  onDelete,
+}: {
+  checks: CheckItem[];
+  onSave: (check: CheckItem) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [filter, setFilter] = useState<"received" | "holding" | "passed">("holding");
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [editingCheck, setEditingCheck] = useState<CheckItem | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [passFormOpen, setPassFormOpen] = useState(false);
+  const sortedChecks = [...checks].sort((a, b) => (b.updatedAt || "").localeCompare(a.updatedAt || ""));
+  const selectedCheck = sortedChecks.find((check) => check.id === selectedId) || sortedChecks[0];
+  const receivedChecks = sortedChecks.filter((check) => check.status === "received" || check.status === "returned");
+  const holdingChecks = sortedChecks.filter((check) => check.status === "holding");
+  const passedChecks = sortedChecks.filter((check) => check.status === "passed");
+  const filteredChecks = filter === "received" ? receivedChecks : filter === "holding" ? holdingChecks : passedChecks;
+  const totalInChecks = sortedChecks
+    .filter((check) => check.status !== "passed")
+    .reduce((total, check) => total + Number(check.amount || 0), 0);
+
+  const startNew = () => {
+    setEditingCheck(null);
+    setShowForm(true);
+    setPassFormOpen(false);
+  };
+
+  const editCheck = (check: CheckItem) => {
+    if (!window.confirm("Tem certeza que deseja alterar este cheque?")) return;
+    setEditingCheck(check);
+    setShowForm(true);
+    setPassFormOpen(false);
+  };
+
+  const saveCheck = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const now = new Date().toISOString();
+    const receivedDate = String(form.get("receivedDate") || todayIso());
+    const currentStatus = editingCheck?.status || "holding";
+    const receivedMovement = {
+      type: "received" as const,
+      date: receivedDate,
+      partyName: String(form.get("receivedFrom") || ""),
+      notes: "Cheque recebido",
+    };
+    const holdingMovement = {
+      type: "holding" as const,
+      date: receivedDate,
+      partyName: "MSG Mineração",
+      notes: "Cheque em posse",
+    };
+    const previousMovements = editingCheck?.movements?.length ? editingCheck.movements : [receivedMovement, holdingMovement];
+
+    const check: CheckItem = {
+      id: editingCheck?.id || newId("check"),
+      checkNumber: String(form.get("checkNumber") || ""),
+      amount: cleanNumber(form.get("amount")),
+      issuerName: String(form.get("issuerName") || ""),
+      issuerDocument: String(form.get("issuerDocument") || ""),
+      bank: String(form.get("bank") || ""),
+      agency: String(form.get("agency") || ""),
+      account: String(form.get("account") || ""),
+      dueDate: String(form.get("dueDate") || todayIso()),
+      receivedDate,
+      receivedFrom: String(form.get("receivedFrom") || ""),
+      passedDate: editingCheck?.passedDate,
+      passedTo: editingCheck?.passedTo,
+      relatedInvoices: String(form.get("relatedInvoices") || "")
+        .split(",")
+        .map((item) => normalizeNoteNumber(item.trim()) || item.trim())
+        .filter(Boolean),
+      notes: String(form.get("notes") || ""),
+      status: currentStatus,
+      movements: previousMovements,
+      createdAt: editingCheck?.createdAt || now,
+      updatedAt: now,
+    };
+
+    onSave(check);
+    setSelectedId(check.id);
+    setShowForm(false);
+    setEditingCheck(null);
+  };
+
+  const updateCheckStatus = (check: CheckItem, status: CheckStatus, movement: CheckItem["movements"][number], patch: Partial<CheckItem> = {}) => {
+    const filteredMovements = (check.movements || []).filter((item) => item.type !== movement.type);
+    const next = {
+      ...check,
+      ...patch,
+      status,
+      movements: [...filteredMovements, movement],
+      updatedAt: new Date().toISOString(),
+    };
+    onSave(next);
+    setSelectedId(next.id);
+  };
+
+  const markHolding = (check: CheckItem) => {
+    if (!window.confirm("Confirmar que este cheque voltou/ficou em posse da empresa?")) return;
+    updateCheckStatus(check, "holding", {
+      type: "holding",
+      date: todayIso(),
+      partyName: "MSG Mineração",
+      notes: "Cheque em posse",
+    });
+  };
+
+  const markReturned = (check: CheckItem) => {
+    const notes = window.prompt("Informe o motivo da devolução:", "Rasura ou falta de saldo") || "";
+    if (!window.confirm("Confirmar cheque devolvido? Ele voltará para recebidos em vermelho.")) return;
+    updateCheckStatus(check, "returned", {
+      type: "returned",
+      date: todayIso(),
+      partyName: "Banco",
+      notes,
+    }, { passedDate: undefined, passedTo: undefined });
+    setFilter("received");
+  };
+
+  const passCheck = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedCheck) return;
+    const form = new FormData(event.currentTarget);
+    const passedTo = String(form.get("passedTo") || "");
+    if (!passedTo.trim()) {
+      window.alert("Informe para quem o cheque será repassado.");
+      return;
+    }
+    if (!window.confirm("Confirmar repasse deste cheque?")) return;
+    const passedDate = String(form.get("passedDate") || todayIso());
+    const relatedInvoices = String(form.get("relatedInvoices") || "")
+      .split(",")
+      .map((item) => normalizeNoteNumber(item.trim()) || item.trim())
+      .filter(Boolean);
+    updateCheckStatus(selectedCheck, "passed", {
+      type: "passed",
+      date: passedDate,
+      partyName: passedTo,
+      notes: String(form.get("passNotes") || ""),
+    }, { passedDate, passedTo, relatedInvoices });
+    setPassFormOpen(false);
+    setFilter("passed");
+  };
+
+  const timeline = selectedCheck?.movements?.length
+    ? selectedCheck.movements.filter((movement) => ["received", "holding", "passed"].includes(movement.type))
+    : [];
+
+  return (
+    <div className="view-stack checks-view">
+      <section className="stats-grid">
+        <StatCard title="Total em cheques" value={formatCurrency(totalInChecks)} tone="info" />
+        <StatCard title="Recebidos pendentes" value={String(receivedChecks.length)} tone="danger" />
+        <StatCard title="Em posse" value={String(holdingChecks.length)} tone="good" />
+        <StatCard title="Repassados" value={String(passedChecks.length)} tone="warn" />
+      </section>
+
+      <section className="panel">
+        <div className="panel-title between">
+          <div>
+            <h2>Controle de cheques</h2>
+            <p className="muted">Recebimento, posse, repasse e devolução de cheques.</p>
+          </div>
+          <ActionButton icon={Plus} onClick={startNew}>Novo cheque recebido</ActionButton>
+        </div>
+        <div className="check-tabs">
+          <button className={filter === "received" ? "active" : ""} type="button" onClick={() => setFilter("received")}>Recebidos</button>
+          <button className={filter === "holding" ? "active" : ""} type="button" onClick={() => setFilter("holding")}>Em posse</button>
+          <button className={filter === "passed" ? "active" : ""} type="button" onClick={() => setFilter("passed")}>Repassados</button>
+        </div>
+      </section>
+
+      {showForm && (
+        <section className="panel">
+          <div className="panel-title between">
+            <h2>{editingCheck ? "Alterar cheque" : "Novo cheque recebido"}</h2>
+            <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingCheck(null); }}>Cancelar</ActionButton>
+          </div>
+          <form className="view-stack" onSubmit={saveCheck}>
+            <div className="form-grid">
+              <Field label="N° do cheque" name="checkNumber" defaultValue={editingCheck?.checkNumber || ""} required sanitize="digits" />
+              <MoneyField label="Valor do cheque" name="amount" defaultValue={formatCurrency(editingCheck?.amount || 0)} autoCalc />
+              <Field label="Emitente" name="issuerName" defaultValue={editingCheck?.issuerName || ""} required />
+              <Field label="CPF/CNPJ emitente" name="issuerDocument" defaultValue={editingCheck?.issuerDocument || ""} sanitize="cpfCnpj" />
+              <Field label="Banco" name="bank" defaultValue={editingCheck?.bank || ""} />
+              <Field label="Agência" name="agency" defaultValue={editingCheck?.agency || ""} />
+              <Field label="Conta" name="account" defaultValue={editingCheck?.account || ""} />
+              <Field label="Pré-datado para" name="dueDate" type="date" defaultValue={editingCheck?.dueDate || todayIso()} required />
+              <Field label="Recebido em" name="receivedDate" type="date" defaultValue={editingCheck?.receivedDate || todayIso()} required />
+              <Field label="Recebido de" name="receivedFrom" defaultValue={editingCheck?.receivedFrom || ""} required />
+              <Field label="Notas relacionadas" name="relatedInvoices" defaultValue={(editingCheck?.relatedInvoices || []).join(", ")} placeholder="Ex.: 5574, 5575" />
+              <label className="field wide">
+                <span>Observação</span>
+                <textarea name="notes" defaultValue={editingCheck?.notes || ""} placeholder="Livre" />
+              </label>
+            </div>
+            <div className="form-actions">
+              <ActionButton icon={Save} type="submit">Salvar cheque</ActionButton>
+            </div>
+          </form>
+        </section>
+      )}
+
+      <section className="checks-layout">
+        <section className="panel checks-list-panel">
+          <h2>{filter === "received" ? "Cheques recebidos" : filter === "holding" ? "Cheques em posse" : "Cheques repassados"}</h2>
+          <div className="checks-list">
+            {filteredChecks.map((check) => (
+              <button
+                key={check.id}
+                type="button"
+                className={`check-card ${selectedCheck?.id === check.id ? "selected" : ""} ${check.status === "returned" ? "returned" : ""}`}
+                onClick={() => setSelectedId(check.id)}
+              >
+                <div>
+                  <strong>{formatCurrency(check.amount)}</strong>
+                  <span>{check.issuerName}</span>
+                  <small>Recebido em {formatDate(check.receivedDate)}</small>
+                </div>
+                <div>
+                  <Badge value={checkStatusLabel(check.status)} />
+                  <small>Pré-datado {formatDate(check.dueDate)}</small>
+                </div>
+              </button>
+            ))}
+            {!filteredChecks.length && <p className="muted">Nenhum cheque nessa situação.</p>}
+          </div>
+        </section>
+
+        <section className="panel check-detail-panel">
+          {selectedCheck ? (
+            <>
+              <div className="panel-title between">
+                <div>
+                  <h2>Detalhes do cheque</h2>
+                  <p className="muted">Cheque N° {selectedCheck.checkNumber}</p>
+                </div>
+                <Badge value={checkStatusLabel(selectedCheck.status)} />
+              </div>
+              <div className={`check-value-box ${selectedCheck.status === "returned" ? "returned" : ""}`}>
+                <span>Valor do cheque</span>
+                <strong>{formatCurrency(selectedCheck.amount)}</strong>
+              </div>
+              <div className="detail-list">
+                <p><span>Emitente</span><strong>{selectedCheck.issuerName}</strong></p>
+                <p><span>CPF/CNPJ</span><strong>{selectedCheck.issuerDocument || "-"}</strong></p>
+                <p><span>Banco</span><strong>{selectedCheck.bank || "-"}</strong></p>
+                <p><span>Agência</span><strong>{selectedCheck.agency || "-"}</strong></p>
+                <p><span>Conta</span><strong>{selectedCheck.account || "-"}</strong></p>
+                <p><span>Pré-datado para</span><strong>{formatDate(selectedCheck.dueDate)}</strong></p>
+                <p><span>Recebido de</span><strong>{selectedCheck.receivedFrom}</strong></p>
+                <p><span>Notas relacionadas</span><strong>{selectedCheck.relatedInvoices.join(", ") || "-"}</strong></p>
+                <p><span>Observação</span><strong>{selectedCheck.notes || "-"}</strong></p>
+              </div>
+              <div className="check-history">
+                <h3>Histórico do cheque</h3>
+                {timeline.map((movement) => (
+                  <div className="check-history-row" key={`${movement.type}-${movement.date}`}>
+                    <span className={movement.type}>{movement.type === "received" ? "Recebido" : movement.type === "holding" ? "Em posse" : "Repassado"}</span>
+                    <strong>{movement.partyName}</strong>
+                    <small>{formatDate(movement.date)} {movement.notes ? `- ${movement.notes}` : ""}</small>
+                  </div>
+                ))}
+                {selectedCheck.status === "returned" && (
+                  <div className="check-history-row returned">
+                    <span>Devolvido</span>
+                    <strong>Banco</strong>
+                    <small>{selectedCheck.movements.find((movement) => movement.type === "returned")?.notes || "Cheque devolvido"}</small>
+                  </div>
+                )}
+              </div>
+              {passFormOpen ? (
+                <form className="pass-check-form" onSubmit={passCheck}>
+                  <div className="form-grid">
+                    <Field label="Repassar para" name="passedTo" defaultValue={selectedCheck.passedTo || ""} required />
+                    <Field label="Data do repasse" name="passedDate" type="date" defaultValue={selectedCheck.passedDate || todayIso()} required />
+                    <Field label="Referente às notas" name="relatedInvoices" defaultValue={selectedCheck.relatedInvoices.join(", ")} placeholder="Ex.: 5574, 5575" />
+                    <label className="field wide">
+                      <span>Observação do repasse</span>
+                      <textarea name="passNotes" defaultValue="" placeholder="Livre" />
+                    </label>
+                  </div>
+                  <div className="form-actions">
+                    <ActionButton icon={X} variant="ghost" onClick={() => setPassFormOpen(false)}>Cancelar</ActionButton>
+                    <ActionButton icon={Save} type="submit">Confirmar repasse</ActionButton>
+                  </div>
+                </form>
+              ) : (
+                <div className="check-actions">
+                  <ActionButton icon={Pencil} variant="ghost" onClick={() => editCheck(selectedCheck)}>Editar</ActionButton>
+                  {selectedCheck.status !== "holding" && <ActionButton icon={CheckCircle2} onClick={() => markHolding(selectedCheck)}>Marcar em posse</ActionButton>}
+                  {selectedCheck.status === "holding" && <ActionButton icon={Plus} onClick={() => setPassFormOpen(true)}>Repassar cheque</ActionButton>}
+                  {selectedCheck.status !== "returned" && <ActionButton icon={AlertTriangle} variant="danger" onClick={() => markReturned(selectedCheck)}>Cheque devolvido</ActionButton>}
+                  <button className="btn danger" type="button" onClick={() => window.confirm("Tem certeza que deseja excluir este cheque?") && onDelete(selectedCheck.id)}>
+                    <X size={17} />
+                    Excluir
+                  </button>
+                </div>
+              )}
+            </>
+          ) : (
+            <p className="muted">Selecione um cheque para ver os detalhes.</p>
+          )}
+        </section>
       </section>
     </div>
   );
@@ -3295,8 +3889,8 @@ function BillFormView({
     const now = new Date().toISOString();
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingBill?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
-      paymentCondition: String(form.get(`paymentCondition_${index}`) || "A prazo"),
-      paymentMethod: String(form.get(`paymentMethod_${index}`) || "Boleto"),
+      paymentCondition: String(form.get(`paymentCondition_${index}`) || "a prazo"),
+      paymentMethod: String(form.get(`paymentMethod_${index}`) || "boleto"),
       holder: String(form.get(`holder_${index}`) || "Itaú"),
       dueDate: String(form.get(`dueDate_${index}`) || todayIso()),
       amount: cleanNumber(form.get(`installmentAmount_${index}`)),
@@ -3338,7 +3932,7 @@ function BillFormView({
       carrierName: "",
       paymentDate: editingBill?.paymentDate || "",
       paid: Boolean(editingBill?.paid),
-      status: "Lancada",
+      status: "Faturada",
       category: "Fatura",
       costCenter,
       totalProducts: amount,
@@ -3474,9 +4068,9 @@ function BillFormView({
                 return (
                   <article className="installment-row" key={installmentIndex}>
                     <strong>Parcela {position + 1}</strong>
-                    <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} defaultValue={installment?.paymentCondition || "A prazo"} />
-                    <Field label="Prazo de pgto" name={`paymentMethod_${installmentIndex}`} defaultValue={installment?.paymentMethod || "Boleto"} />
-                    <Field label="Portador" name={`holder_${installmentIndex}`} options={holderOptions} defaultValue={installment?.holder || "Itaú"} />
+                    <Field label="Forma de pagamento" name={`paymentCondition_${installmentIndex}`} options={configuredPaymentConditions()} defaultValue={installment?.paymentCondition || "a prazo"} />
+                    <Field label="Meio de pagamento" name={`paymentMethod_${installmentIndex}`} options={configuredPaymentMethods()} defaultValue={installment?.paymentMethod || "boleto"} />
+                    <Field label="Portador" name={`holder_${installmentIndex}`} options={configuredHolders()} defaultValue={installment?.holder || "Itaú"} />
                     <Field label="Vencimento" name={`dueDate_${installmentIndex}`} type="date" defaultValue={installment?.dueDate || todayIso()} />
                     <MoneyField label="Valor da parcela" name={`installmentAmount_${installmentIndex}`} defaultValue={formatCurrency(installment?.amount || (position === 0 ? cleanNumber(totalValue) : 0))} autoCalc />
                     <MoneyField label="Valor PF" name={`installmentPfValue_${installmentIndex}`} defaultValue={formatCurrency(installment?.pfValue || 0)} autoCalc />
@@ -3576,11 +4170,13 @@ function CashView({
   cashMovements,
   onSaveMovement,
   onDeleteMovement,
+  mode = "normal",
 }: {
   invoices: Invoice[];
   cashMovements: CashMovement[];
   onSaveMovement: (movement: CashMovement) => void;
   onDeleteMovement: (id: string) => void;
+  mode?: "normal" | "pf";
 }) {
   const today = todayIso();
   const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
@@ -3600,20 +4196,24 @@ function CashView({
         : null;
     if (!kind) return [];
     return invoiceInstallments(invoice)
-      .filter((installment) => installment.paid && installment.paymentDate)
+      .filter((installment) => mode === "pf" ? Boolean(installment.pfPaid && installment.pfPaymentDate && installment.pfValue) : Boolean(installment.paid && installment.paymentDate && installment.amount))
       .map((installment) => ({
         id: `invoice_${invoice.id}_${installment.id}`,
         source: "invoice" as const,
-        date: installment.paymentDate || today,
+        date: mode === "pf" ? installment.pfPaymentDate || today : installment.paymentDate || today,
         action: kind,
-        holder: installment.holder || "Itaú",
+        holder: mode === "pf" ? installment.pfHolder || installment.holder || "Itaú" : installment.holder || "Itaú",
         costCenter: invoice.costCenter || invoice.items?.[0]?.costCenter || (kind === "Entrada" ? "Vendas" : "Sem centro de custo"),
-        history: `${kind === "Entrada" ? "Recebimento" : "Pagamento"} NF-e N° ${invoice.invoiceNumber} - ${invoice.partyName}`,
-        amount: kind === "Entrada" ? installmentTotal(installment) : -installmentTotal(installment),
+        history: `${kind === "Entrada" ? "Recebimento" : "Pagamento"} ${mode === "pf" ? "PF " : ""}NF-e N° ${invoice.invoiceNumber} - ${invoice.partyName}`,
+        amount: kind === "Entrada"
+          ? (mode === "pf" ? Number(installment.pfSettledValue || installment.pfValue || 0) : Number(installment.settledValue || installment.amount || 0))
+          : -(mode === "pf" ? Number(installment.pfSettledValue || installment.pfValue || 0) : Number(installment.settledValue || installment.amount || 0)),
       }));
   });
 
-  const manualEntries: CashExtractEntry[] = cashMovements.flatMap<CashExtractEntry>((movement) => {
+  const manualEntries: CashExtractEntry[] = cashMovements
+  .filter((movement) => (movement.cashScope || "normal") === mode)
+  .flatMap<CashExtractEntry>((movement) => {
     if (movement.movementType === "transfer") {
       return [
         {
@@ -3667,7 +4267,7 @@ function CashView({
     .sort((a, b) => a.date.localeCompare(b.date) || a.holder.localeCompare(b.holder));
 
   const costCenters = Array.from(new Set([...fiscalConfig.costCenters, ...allEntries.map((entry) => entry.costCenter)].filter(Boolean)));
-  const holders = Array.from(new Set([...holderOptions, ...cashMovements.flatMap((item) => [item.holder, item.destinationHolder || ""])].filter(Boolean)));
+  const holders = Array.from(new Set([...configuredHolders(), ...cashMovements.flatMap((item) => [item.holder, item.destinationHolder || ""])].filter(Boolean)));
   const totalIn = allEntries.filter((entry) => entry.amount > 0).reduce((total, entry) => total + entry.amount, 0);
   const totalOut = Math.abs(allEntries.filter((entry) => entry.amount < 0).reduce((total, entry) => total + entry.amount, 0));
   const balance = totalIn - totalOut;
@@ -3694,6 +4294,7 @@ function CashView({
     onSaveMovement({
       id: editingMovement?.id || newId("cash"),
       movementType,
+      cashScope: mode,
       date: String(form.get("date") || today),
       holder: String(form.get("holder") || "Itaú"),
       destinationHolder: movementType === "transfer" ? String(form.get("destinationHolder") || "") : undefined,
@@ -3776,9 +4377,9 @@ function CashView({
               </select>
             </label>
             <Field label="Data" name="date" type="date" defaultValue={editingMovement?.date || today} required />
-            <Field label={movementType === "transfer" ? "Conta origem" : "Portador"} name="holder" options={holderOptions} defaultValue={editingMovement?.holder || "Itaú"} />
+            <Field label={movementType === "transfer" ? "Conta origem" : "Portador"} name="holder" options={configuredHolders()} defaultValue={editingMovement?.holder || "Itaú"} />
             {movementType === "transfer" && (
-              <Field label="Conta destino" name="destinationHolder" options={holderOptions} defaultValue={editingMovement?.destinationHolder || "Sicredi"} />
+              <Field label="Conta destino" name="destinationHolder" options={configuredHolders()} defaultValue={editingMovement?.destinationHolder || "Sicredi"} />
             )}
             <Field label="Centro custo" name="costCenter" options={fiscalConfig.costCenters} defaultValue={editingMovement?.costCenter || ""} />
             {movementType === "transfer" && (
@@ -4071,6 +4672,7 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const [simulatedExpenses, setSimulatedExpenses] = useState("");
   const [simulatedGrossRevenue, setSimulatedGrossRevenue] = useState("");
   const [simulatedTaxes, setSimulatedTaxes] = useState("");
+  const [includePfInDre, setIncludePfInDre] = useState(false);
   const inPeriod = (invoice: Invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return (!startDate || date >= startDate) && (!endDate || date <= endDate);
@@ -4088,11 +4690,17 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const expenses = simulatedExpenses ? cleanNumber(simulatedExpenses) : automaticExpenses;
   const issuedPfTotal = sum(issued, (invoice) => Number(invoice.pfValue || 0));
   const receivedPfTotal = sum(received, (invoice) => Number(invoice.pfValue || 0));
-  const profit = grossRevenue - taxes - costs - expenses;
+  const pfRevenueImpact = includePfInDre ? issuedPfTotal : 0;
+  const pfCostImpact = includePfInDre ? receivedPfTotal : 0;
+  const profit = grossRevenue + pfRevenueImpact - taxes - costs - expenses - pfCostImpact;
   const dreChart = [
     { name: "Impostos", value: chartValue(taxes), color: "#dc2626" },
     { name: "Custos", value: chartValue(costs), color: "#f97316" },
     { name: "Despesas", value: chartValue(expenses), color: "#7c3aed" },
+    ...(includePfInDre ? [
+      { name: "PF Faturado", value: chartValue(issuedPfTotal), color: "#0f766e" },
+      { name: "PF Compras", value: chartValue(receivedPfTotal), color: "#92400e" },
+    ] : []),
     { name: "Lucro", value: chartValue(profit), color: "#16a34a" },
   ];
   const dreChartData = dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }];
@@ -4115,6 +4723,10 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
             <strong>Total PF</strong>
             <span>Faturado: {formatCurrency(issuedPfTotal)}</span>
             <span>Compras: {formatCurrency(receivedPfTotal)}</span>
+            <label className="check compact-check">
+              <input type="checkbox" checked={includePfInDre} onChange={(event) => setIncludePfInDre(event.target.checked)} />
+              Considerar no DRE
+            </label>
           </section>
           <ActionButton icon={Settings} variant="ghost" onClick={() => setShowAdjust((current) => !current)}>
             Ajustar Custos e Despesas
@@ -4146,9 +4758,11 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
         <h2>DRE automática</h2>
         <div className="dre-lines">
           <div><span>Receita Bruta</span><strong>{formatCurrency(grossRevenue)}</strong></div>
+          {includePfInDre && <div><span>Total PF Faturado</span><strong>{formatCurrency(issuedPfTotal)}</strong></div>}
           <div><span>(-) Impostos</span><strong>{formatCurrency(taxes)}</strong></div>
           <div><span>(-) Custos</span><strong>{formatCurrency(costs)}</strong></div>
           <div><span>(-) Despesas</span><strong>{formatCurrency(expenses)}</strong></div>
+          {includePfInDre && <div><span>Total PF Compras</span><strong>{formatCurrency(receivedPfTotal)}</strong></div>}
           <div className="dre-total"><span>= Lucro</span><strong>{formatCurrency(profit)}</strong></div>
         </div>
       </section>
@@ -4166,46 +4780,6 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
           </PieChart>
         </ResponsiveContainer>
       </section>
-    </div>
-  );
-}
-
-function ReportsView({ invoices, operations }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
-  const financialInvoices = invoices.filter(invoiceHasFinancialEffect);
-  const reports = [
-    "Faturamento por cliente",
-    "Faturamento por produto",
-    "Faturamento por CFOP",
-    "Notas por cliente",
-    "Notas por fornecedor",
-    "Notas por CFOP",
-    "Operações vinculadas",
-    "Triangulações em compras",
-    "Apuração de ICMS",
-    "Apuração de PIS/COFINS",
-    "CFEM",
-    "Notas canceladas",
-    "Compras por categoria",
-    "Compras por centro de custo",
-    "Fretes",
-    "Livro fiscal simplificado",
-  ];
-
-  return (
-    <div className="view-stack">
-      <div className="report-grid">
-        {reports.map((report) => (
-          <article className="report-card" key={report}>
-            <BarChart3 size={21} />
-            <h3>{report}</h3>
-            <div className="report-actions">
-              <button onClick={() => exportRows(financialInvoices as unknown as Record<string, unknown>[], report.toLowerCase().replace(/\s+/g, "-"))}>Excel</button>
-              <button onClick={() => exportCsv(operations as unknown as Record<string, unknown>[], "operacoes")}>CSV</button>
-              <button onClick={() => window.print()}>PDF</button>
-            </div>
-          </article>
-        ))}
-      </div>
     </div>
   );
 }
@@ -4450,6 +5024,7 @@ function ProductsView({
         const key = `${normalizeSearch(name)}|${ncm}`;
         if (catalog.has(key)) return;
         catalog.set(key, {
+          code: String(item.itemCode || "").trim(),
           name,
           ncm,
           defaultCostCenter: item.costCenter || "",
@@ -4489,6 +5064,7 @@ function ProductsView({
     onSave({
       id: editingProduct?.id || newId("prod"),
       name: String(form.get("name") || "").trim(),
+      code: String(form.get("code") || "").trim(),
       ncm: onlyDigits(String(form.get("ncm") || "")),
       defaultCostCenter: String(form.get("defaultCostCenter") || ""),
       defaultCategory: String(form.get("defaultCategory") || ""),
@@ -4524,6 +5100,7 @@ function ProductsView({
           </div>
           <form className="form-grid" onSubmit={saveProduct}>
             <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
+            <Field label="Código do produto" name="code" defaultValue={editingProduct?.code || ""} />
             <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
             <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
             <Field label="Categoria padrão" name="defaultCategory" options={fiscalConfig.categories} defaultValue={editingProduct?.defaultCategory || ""} />
@@ -4548,6 +5125,7 @@ function ProductsView({
             <thead>
               <tr>
                 <th>Produto</th>
+                <th>Código do produto</th>
                 <th>NCM</th>
                 <th>Centro de custo padrão</th>
                 <th>Categoria</th>
@@ -4560,6 +5138,7 @@ function ProductsView({
               {products.map((product) => (
                 <tr key={product.id}>
                   <td>{product.name}</td>
+                  <td>{product.code}</td>
                   <td>{product.ncm}</td>
                   <td>{product.defaultCostCenter}</td>
                   <td>{product.defaultCategory}</td>
@@ -4594,7 +5173,7 @@ function ProductsView({
               ))}
               {!products.length && (
                 <tr>
-                  <td colSpan={canEdit ? 7 : 6}>Nenhum produto cadastrado.</td>
+                  <td colSpan={canEdit ? 8 : 7}>Nenhum produto cadastrado.</td>
                 </tr>
               )}
             </tbody>
@@ -4626,6 +5205,22 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
       if (!fiscalConfig.units) fiscalConfig.units = [...unitOptions];
       return fiscalConfig.units;
     }
+    if (listName === "paymentConditions") {
+      if (!fiscalConfig.paymentConditions) fiscalConfig.paymentConditions = [...paymentConditionOptions];
+      return fiscalConfig.paymentConditions;
+    }
+    if (listName === "paymentMethods") {
+      if (!fiscalConfig.paymentMethods) fiscalConfig.paymentMethods = [...paymentMethodOptions];
+      return fiscalConfig.paymentMethods;
+    }
+    if (listName === "holders") {
+      if (!fiscalConfig.holders) fiscalConfig.holders = [...holderOptions];
+      return fiscalConfig.holders;
+    }
+    if (listName === "financialCategories") {
+      if (!fiscalConfig.financialCategories) fiscalConfig.financialCategories = [...fiscalConfig.categories];
+      return fiscalConfig.financialCategories;
+    }
 
     return fiscalConfig[listName];
   }
@@ -4633,6 +5228,22 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
   function setConfigList(listName: FiscalConfigListName, list: string[]) {
     if (listName === "units") {
       fiscalConfig.units = list;
+      return;
+    }
+    if (listName === "paymentConditions") {
+      fiscalConfig.paymentConditions = list;
+      return;
+    }
+    if (listName === "paymentMethods") {
+      fiscalConfig.paymentMethods = list;
+      return;
+    }
+    if (listName === "holders") {
+      fiscalConfig.holders = list;
+      return;
+    }
+    if (listName === "financialCategories") {
+      fiscalConfig.financialCategories = list;
       return;
     }
 
@@ -4748,8 +5359,13 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                   <option value="ncms">NCM</option>
                   <option value="categories">Categoria</option>
                   <option value="costCenters">Centro de custo</option>
+                  <option value="operationTypes">Tipo de operação</option>
                   <option value="linkedTypes">Tipo de operação vinculada</option>
                   <option value="units">Unidade</option>
+                  <option value="paymentConditions">Forma de pagamento</option>
+                  <option value="paymentMethods">Meio de pagamento</option>
+                  <option value="holders">Portador</option>
+                  <option value="financialCategories">Categoria financeira</option>
                 </select>
               </label>
               <label className="field">
@@ -4804,8 +5420,13 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
             ["ncms", "NCM", configSnapshot.ncms],
             ["categories", "Categorias", configSnapshot.categories],
             ["costCenters", "Centro de custos", configSnapshot.costCenters],
+            ["operationTypes", "Tipos de operação", configSnapshot.operationTypes || operationTypeOptions],
             ["linkedTypes", "Operações vinculadas", configSnapshot.linkedTypes],
             ["units", "Unidades", configSnapshot.units || unitOptions],
+            ["paymentConditions", "Formas de pagamento", configSnapshot.paymentConditions || paymentConditionOptions],
+            ["paymentMethods", "Meios de pagamento", configSnapshot.paymentMethods || paymentMethodOptions],
+            ["holders", "Portadores", configSnapshot.holders || holderOptions],
+            ["financialCategories", "Categorias financeiras", configSnapshot.financialCategories || fiscalConfig.categories],
           ] as Array<[FiscalConfigListName, string, string[]]>).map(([listName, title, list]) => (
             <section className="settings-list-group" key={listName}>
               <h3>{title}</h3>
@@ -5013,7 +5634,7 @@ export default function App() {
     setView("registrations");
   };
   const blockedPeriodMessage = (period: string) =>
-    `A competência ${periodLabel(period)} está fechada. Desbloqueie a competência na Apuração Fiscal antes de alterar lançamentos desse período.`;
+    `A competência ${periodLabel(period)} está fechada. Desbloqueie a competência em Fechamentos antes de alterar lançamentos desse período.`;
   const ensurePeriodOpen = (period: string) => {
     if (!isPeriodClosed(period)) return true;
     window.alert(blockedPeriodMessage(period));
@@ -5024,17 +5645,25 @@ export default function App() {
     const previous = store.invoices.find((item) => item.id === invoice.id);
     if (previous) periods.add(invoicePeriodKey(previous));
     if (![...periods].every(ensurePeriodOpen)) return false;
+    if (
+      previous &&
+      invoiceHasPostedPayments(previous) &&
+      invoiceDataSnapshot(previous) !== invoiceDataSnapshot(invoice)
+    ) {
+      window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de alterar a nota.");
+      return false;
+    }
     store.saveInvoice(invoice);
     return true;
   };
   const guardedDeleteInvoice = (id: string) => {
     const invoice = store.invoices.find((item) => item.id === id);
     if (invoice && !ensurePeriodOpen(invoicePeriodKey(invoice))) return;
+    if (invoice && invoiceHasPostedPayments(invoice)) {
+      window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de excluir a nota.");
+      return;
+    }
     store.deleteInvoice(id);
-  };
-  const guardedMarkInvoicePaid = (invoice: Invoice, paymentDate?: string) => {
-    if (!ensurePeriodOpen(invoicePeriodKey(invoice))) return;
-    store.markInvoicePaid(invoice, paymentDate);
   };
   const guardedSaveLinkedOperation = (operation: LinkedOperation) => {
     const periods = new Set([operationPeriodKey(operation)]);
@@ -5164,7 +5793,6 @@ export default function App() {
               type="issued"
               invoices={store.invoices}
               onNew={() => openNewInvoice("new-issued")}
-              onPaid={guardedMarkInvoicePaid}
               onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
               canEdit={canEdit}
@@ -5175,7 +5803,6 @@ export default function App() {
               type="received"
               invoices={store.invoices}
               onNew={() => openNewInvoice("new-received")}
-              onPaid={guardedMarkInvoicePaid}
               onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
               canEdit={canEdit}
@@ -5189,7 +5816,7 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
-              canEdit={canEdit && (!editingInvoice || !isPeriodClosed(invoicePeriodKey(editingInvoice)))}
+              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onOperation={guardedSaveLinkedOperation}
@@ -5208,7 +5835,7 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
-              canEdit={canEdit && (!editingInvoice || !isPeriodClosed(invoicePeriodKey(editingInvoice)))}
+              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onOperation={guardedSaveLinkedOperation}
@@ -5223,14 +5850,29 @@ export default function App() {
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "conference" && <ConferenceView invoices={store.invoices} onOpen={openInvoiceForm} />}
           {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
+          {view === "closures" && <ClosuresView invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
           {view === "financial" && (
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
             />
           )}
+          {view === "financial-pf" && (
+            <FinancialView
+              invoices={store.invoices}
+              onSave={guardedSaveInvoice}
+              onDelete={guardedDeleteInvoice}
+              onOpenInvoice={openInvoiceForm}
+              bankBalanceValue={bankBalanceValue}
+              onBankBalanceSave={saveBankBalance}
+              mode="pf"
+            />
+          )}
+          {view === "checks" && <ChecksView checks={store.checks} onSave={store.saveCheck} onDelete={store.deleteCheck} />}
           {view === "bills" && (
             <BillFormView
               invoices={store.invoices}
@@ -5248,6 +5890,15 @@ export default function App() {
               onDeleteMovement={store.deleteCashMovement}
             />
           )}
+          {view === "cash-pf" && (
+            <CashView
+              invoices={store.invoices}
+              cashMovements={store.cashMovements}
+              onSaveMovement={store.saveCashMovement}
+              onDeleteMovement={store.deleteCashMovement}
+              mode="pf"
+            />
+          )}
           {view === "products" && (
             <ProductsView
               invoices={store.invoices}
@@ -5259,7 +5910,6 @@ export default function App() {
           )}
           {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
-          {view === "reports" && <ReportsView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} initialKind={registrationKind} />}
           {view === "settings" && <SettingsView syncMode={store.syncMode} canEdit={canEdit} />}
           {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} />}

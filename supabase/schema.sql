@@ -181,6 +181,7 @@ create table if not exists public.assets (
 create table if not exists public.cash_movements (
   id text primary key,
   movement_type text not null check (movement_type in ('entry', 'outflow', 'transfer')),
+  cash_scope text not null default 'normal' check (cash_scope in ('normal', 'pf')),
   movement_date date not null,
   holder text not null,
   destination_holder text,
@@ -192,8 +193,12 @@ create table if not exists public.cash_movements (
   updated_at timestamptz not null default now()
 );
 
+alter table public.cash_movements
+  add column if not exists cash_scope text not null default 'normal';
+
 create table if not exists public.products (
   id text primary key,
+  product_code text,
   name text not null,
   ncm text,
   default_cost_center text,
@@ -202,6 +207,30 @@ create table if not exists public.products (
   accounting_account text,
   color text,
   active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.products add column if not exists product_code text;
+
+create table if not exists public.checks (
+  id text primary key,
+  check_number text not null,
+  amount numeric(14, 2) not null default 0,
+  issuer_name text not null,
+  issuer_document text,
+  bank text,
+  agency text,
+  account text,
+  due_date date not null,
+  received_date date not null,
+  received_from text,
+  passed_date date,
+  passed_to text,
+  related_invoices jsonb not null default '[]'::jsonb,
+  notes text,
+  status text not null default 'received' check (status in ('received', 'holding', 'passed', 'returned')),
+  movements jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -218,6 +247,7 @@ create index if not exists parties_kind_name_idx on public.parties(kind, name);
 create index if not exists assets_archived_type_idx on public.assets(archived, item_type);
 create index if not exists cash_movements_date_holder_idx on public.cash_movements(movement_date, holder);
 create index if not exists products_name_idx on public.products(name);
+create index if not exists checks_status_due_idx on public.checks(status, due_date);
 
 alter table public.invoices replica identity full;
 alter table public.linked_operations replica identity full;
@@ -226,6 +256,7 @@ alter table public.fiscal_settings replica identity full;
 alter table public.assets replica identity full;
 alter table public.cash_movements replica identity full;
 alter table public.products replica identity full;
+alter table public.checks replica identity full;
 
 do $$
 begin
@@ -318,6 +349,19 @@ begin
   end if;
 end $$;
 
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'checks'
+  ) then
+    alter publication supabase_realtime add table public.checks;
+  end if;
+end $$;
+
 alter table public.invoices enable row level security;
 alter table public.linked_operations enable row level security;
 alter table public.audit_logs enable row level security;
@@ -327,6 +371,7 @@ alter table public.fiscal_settings enable row level security;
 alter table public.assets enable row level security;
 alter table public.cash_movements enable row level security;
 alter table public.products enable row level security;
+alter table public.checks enable row level security;
 
 revoke all on table public.invoices from anon;
 revoke all on table public.linked_operations from anon;
@@ -335,6 +380,7 @@ revoke all on table public.fiscal_settings from anon;
 revoke all on table public.assets from anon;
 revoke all on table public.cash_movements from anon;
 revoke all on table public.products from anon;
+revoke all on table public.checks from anon;
 revoke all on table public.audit_logs from anon;
 revoke all on table public.attachments from anon;
 revoke all on table public.invoices from authenticated;
@@ -344,6 +390,7 @@ revoke all on table public.fiscal_settings from authenticated;
 revoke all on table public.assets from authenticated;
 revoke all on table public.cash_movements from authenticated;
 revoke all on table public.products from authenticated;
+revoke all on table public.checks from authenticated;
 revoke all on table public.audit_logs from authenticated;
 revoke all on table public.attachments from authenticated;
 
@@ -354,6 +401,7 @@ grant select, insert, update, delete on table public.fiscal_settings to authenti
 grant select, insert, update, delete on table public.assets to authenticated;
 grant select, insert, update, delete on table public.cash_movements to authenticated;
 grant select, insert, update, delete on table public.products to authenticated;
+grant select, insert, update, delete on table public.checks to authenticated;
 grant select on table public.audit_logs to authenticated;
 grant select on table public.attachments to authenticated;
 
@@ -550,6 +598,31 @@ create policy "Allow authenticated update products"
 drop policy if exists "Allow authenticated delete products" on public.products;
 create policy "Allow authenticated delete products"
   on public.products for delete
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated read checks" on public.checks;
+create policy "Allow authenticated read checks"
+  on public.checks for select
+  to authenticated
+  using ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated insert checks" on public.checks;
+create policy "Allow authenticated insert checks"
+  on public.checks for insert
+  to authenticated
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated update checks" on public.checks;
+create policy "Allow authenticated update checks"
+  on public.checks for update
+  to authenticated
+  using ((select auth.uid()) is not null)
+  with check ((select auth.uid()) is not null);
+
+drop policy if exists "Allow authenticated delete checks" on public.checks;
+create policy "Allow authenticated delete checks"
+  on public.checks for delete
   to authenticated
   using ((select auth.uid()) is not null);
 

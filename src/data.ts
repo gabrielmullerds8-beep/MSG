@@ -70,6 +70,13 @@ export const fiscalConfig: FiscalConfig = {
     "Fretes",
     "Financeiro",
   ],
+  operationTypes: [
+    "Venda de Produção",
+    "Devolução",
+    "Remessa para Industrialização",
+    "Remessa para Conserto",
+    "Remessa para armazenagem",
+  ],
   linkedTypes: [
     "Compra com triangulação",
     "Venda à ordem",
@@ -82,7 +89,11 @@ export const fiscalConfig: FiscalConfig = {
     "Industrialização",
     "Outra",
   ],
-  units: ["UN", "KG", "TN", "MT", "PC", "SV"],
+  units: ["UN", "KG", "M3", "TN", "MT", "PC", "SV"],
+  paymentConditions: ["a prazo", "à vista", "sem pagamento"],
+  paymentMethods: ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"],
+  holders: ["Itaú", "Sicredi", "Itaú Mailson"],
+  financialCategories: ["Vendas", "Compras", "Fretes", "Serviços", "Manutenção", "Administrativo", "Financeiro"],
 };
 
 export const getCfopCode = (value: string) => String(value || "").split(" - ")[0].trim();

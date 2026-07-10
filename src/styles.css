@@ -780,6 +780,219 @@ button {
   max-height: 250px;
 }
 
+.checks-view .stats-grid {
+  grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr));
+}
+
+.check-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.check-tabs button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--muted);
+  padding: 9px 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.check-tabs button.active {
+  border-color: var(--green);
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.checks-layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(520px, 1.25fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.checks-list-panel,
+.check-detail-panel {
+  min-height: 540px;
+}
+
+.checks-list {
+  display: grid;
+  gap: 10px;
+  max-height: 480px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.check-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: 8px;
+  background: #fff;
+  padding: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.check-card.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px #dbeafe;
+}
+
+.check-card.returned {
+  border-left-color: var(--red);
+  background: #fff5f5;
+}
+
+.check-card div {
+  display: grid;
+  gap: 4px;
+}
+
+.check-card strong {
+  color: #15803d;
+  font-size: 16px;
+}
+
+.check-card.returned strong {
+  color: var(--red);
+}
+
+.check-card span,
+.check-card small {
+  color: #334155;
+}
+
+.check-card small {
+  font-size: 12px;
+}
+
+.check-value-box {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--green);
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff;
+}
+
+.check-value-box.returned {
+  border-left-color: var(--red);
+  background: #fff5f5;
+}
+
+.check-value-box span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.check-value-box strong {
+  color: #15803d;
+  font-size: 30px;
+}
+
+.check-value-box.returned strong {
+  color: var(--red);
+}
+
+.detail-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.detail-list p {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  border-bottom: 1px solid var(--line);
+  margin: 0;
+  padding: 7px 0;
+}
+
+.detail-list span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.detail-list strong {
+  text-align: right;
+}
+
+.check-history {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.check-history h3 {
+  margin: 0;
+}
+
+.check-history-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 4px 12px;
+  align-items: center;
+}
+
+.check-history-row span {
+  border-radius: 999px;
+  padding: 5px 9px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.check-history-row span.received {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.check-history-row span.holding {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.check-history-row span.passed {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.check-history-row.returned span {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.check-history-row small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.check-actions,
+.pass-check-form {
+  margin-top: 14px;
+}
+
+.check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -1075,6 +1288,140 @@ tr:last-child td {
   height: 320px;
   overflow: auto;
   border-top: 1px solid var(--line);
+}
+
+.financial-table th,
+.financial-table td {
+  white-space: nowrap;
+}
+
+.financial-table td:nth-child(5) {
+  white-space: normal;
+  min-width: 220px;
+}
+
+.finance-row-payable {
+  background: #fff1f2;
+}
+
+.finance-row-receivable {
+  background: #f0fdf4;
+}
+
+.row-menu {
+  position: relative;
+}
+
+.row-menu summary {
+  align-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  display: inline-flex;
+  justify-content: center;
+  list-style: none;
+  padding: 5px;
+}
+
+.row-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.row-menu[open] summary {
+  background: #e5eefb;
+}
+
+.row-menu[open]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+}
+
+.row-menu button {
+  background: #fff;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 8px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.row-menu button:hover {
+  background: #eef4ff;
+}
+
+.row-menu > button,
+.row-menu > summary + button {
+  position: relative;
+  z-index: 16;
+}
+
+.row-menu[open] {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.16);
+  min-width: 130px;
+  padding: 4px;
+}
+
+.modal-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.38);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 24px;
+  position: fixed;
+  z-index: 100;
+}
+
+.settlement-modal {
+  background: #fff;
+  border-top: 5px solid #16a34a;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.24);
+  max-width: 980px;
+  padding: 28px;
+  width: min(980px, 100%);
+}
+
+.settlement-modal h2 {
+  font-size: 28px;
+  margin-bottom: 22px;
+}
+
+.settlement-grid {
+  display: grid;
+  gap: 18px 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settlement-grid .wide {
+  grid-column: 1 / -1;
+}
+
+.switch-line {
+  align-items: center;
+  background: #f3f4f6;
+  display: flex;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 12px;
+}
+
+.settlement-total input {
+  color: #64748b;
+  font-size: 24px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.settlement-actions {
+  justify-content: flex-end;
+  margin-top: 28px;
 }
 
 .financial-table {
@@ -1743,6 +2090,7 @@ tr:last-child td {
   .detail-grid,
   .asset-card-grid,
   .conference-grid,
+  .checks-layout,
   .triple-grid,
   .report-grid,
   .settings-list-grid,
@@ -1847,6 +2195,7 @@ tr:last-child td {
   .detail-grid,
   .asset-card-grid,
   .conference-grid,
+  .checks-layout,
   .report-grid,
   .settings-list-grid,
   .item-totals-grid,
