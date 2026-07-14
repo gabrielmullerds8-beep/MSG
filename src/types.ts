@@ -248,6 +248,9 @@ export interface AssetItem {
   acquisitionValue: number;
   plate?: string;
   registrationNumber?: string;
+  situation: "Próprio" | "Alugado" | "Vendido";
+  status?: "Em uso" | "Locado" | "Empréstimo";
+  notes?: string;
   archived: boolean;
   createdAt: string;
   updatedAt: string;

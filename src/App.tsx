@@ -76,6 +76,7 @@ type View =
   | "financial-pf-payable"
   | "checks"
   | "bills"
+  | "new-bill"
   | "closures"
   | "cash"
   | "cash-pf"
@@ -91,7 +92,6 @@ const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
   { id: "dre", label: "DRE", icon: BarChart3 },
   { id: "assets", label: "Patrimônio", icon: Building2 },
-  { id: "closures", label: "Fechamentos", icon: Lock },
   { id: "registrations", label: "Cadastros", icon: Building2 },
   { id: "products", label: "Produtos", icon: PackagePlus },
   { id: "settings", label: "Configurações", icon: Settings },
@@ -114,12 +114,14 @@ const noteViews: Array<{ id: View; label: string; icon: any }> = [
   { id: "bills", label: "Faturas", icon: Files },
   { id: "new-issued", label: "Nova Nota Emitida", icon: Plus },
   { id: "new-received", label: "Nova Nota Recebida", icon: PackagePlus },
+  { id: "new-bill", label: "Nova Fatura", icon: Plus },
 ];
 
 const fiscalViews: Array<{ id: View; label: string; icon: any }> = [
   { id: "tax", label: "Apuração Fiscal", icon: ClipboardList },
   { id: "linked", label: "Operações Vinculadas", icon: Link2 },
   { id: "conference", label: "Conferência", icon: AlertTriangle },
+  { id: "closures", label: "Fechamentos", icon: Lock },
 ];
 
 const financialViewIds = new Set<View>(financialViews.map((item) => item.id));
@@ -1085,6 +1087,81 @@ function PartySelect({
               Cadastrar novo
             </button>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProductSearchSelect({
+  products,
+  value,
+  onChange,
+  name,
+}: {
+  products: ProductItem[];
+  value: string;
+  onChange: (productId: string) => void;
+  name: string;
+}) {
+  const selected = products.find((product) => product.id === value);
+  const selectedLabel = selected ? [selected.code, selected.name].filter(Boolean).join(" - ") : "";
+  const [query, setQuery] = useState(selectedLabel);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setQuery(selectedLabel);
+  }, [selectedLabel]);
+
+  const suggestions = products
+    .filter((product) => product.active || product.id === value)
+    .filter((product) => searchMatches([product.code, product.name, product.ncm].join(" "), query))
+    .slice(0, 8);
+
+  return (
+    <div className="field product-search-select">
+      <span>Produto vendido</span>
+      <div className="search-input-control">
+        <Search size={17} />
+        <input
+          autoComplete="off"
+          placeholder="Buscar por código ou nome"
+          role="combobox"
+          aria-expanded={open}
+          value={query}
+          onFocus={() => setOpen(true)}
+          onBlur={() => {
+            setOpen(false);
+            if (value) setQuery(selectedLabel);
+          }}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          required={!value}
+        />
+      </div>
+      <input name={name} type="hidden" value={value} readOnly />
+      {open && (
+        <div className="suggestion-list product-suggestions" role="listbox">
+          {suggestions.map((product) => (
+            <button
+              key={product.id}
+              type="button"
+              role="option"
+              aria-selected={product.id === value}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onChange(product.id);
+                setQuery([product.code, product.name].filter(Boolean).join(" - "));
+                setOpen(false);
+              }}
+            >
+              <strong>{product.code || "Sem código"}</strong>
+              <span>{product.name}</span>
+            </button>
+          ))}
+          {!suggestions.length && <div className="suggestion-empty">Nenhum produto ativo encontrado.</div>}
         </div>
       )}
     </div>
@@ -2285,7 +2362,7 @@ function InvoiceForm({
             const taxIsEnabled = (base?: number, value?: number, rate?: number) => Boolean(Number(base || 0) || Number(value || 0) || Number(rate || 0));
             const taxBaseValue = formatCurrency(existingItem?.icmsBase || existingItem?.pisBase || existingItem?.cofinsBase || existingItem?.totalValue || 0);
             return (
-            <article className="item-card" key={`${itemIndex}-${selectedProductId || "manual"}`}>
+            <article className="item-card" key={itemIndex}>
               <div className="panel-title between">
                 <h3>Item {position + 1}</h3>
                 {canEdit && itemIndexes.length > 1 && (
@@ -2303,22 +2380,12 @@ function InvoiceForm({
                 <div className="subsection-label">Produto/serviço</div>
                 {!isReceived ? (
                   <>
-                    <label className="field">
-                      <span>Produto vendido</span>
-                      <select
-                        name={`productId_${itemIndex}`}
-                        value={selectedProductId}
-                        onChange={(event) => setSelectedProducts((current) => ({ ...current, [itemIndex]: event.target.value }))}
-                        required
-                      >
-                        <option value="">Selecione</option>
-                        {products.filter((product) => product.active || product.id === selectedProductId).map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <ProductSearchSelect
+                      name={`productId_${itemIndex}`}
+                      products={products}
+                      value={selectedProductId}
+                      onChange={(productId) => setSelectedProducts((current) => ({ ...current, [itemIndex]: productId }))}
+                    />
                     <ReadOnlyField label="Descrição do produto/serviço" name={`description_${itemIndex}`} value={selectedProduct?.name || existingItem?.description || ""} />
                     <input name={`itemCode_${itemIndex}`} type="hidden" value={selectedProduct?.code || existingItem?.itemCode || ""} readOnly />
                     <input name={`category_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCategory || existingItem?.category || ""} readOnly />
@@ -3154,7 +3221,6 @@ function ClosuresView({
 function FinancialView({
   invoices,
   onSave,
-  onDelete,
   onOpenInvoice,
   bankBalanceValue,
   onBankBalanceSave,
@@ -3163,7 +3229,6 @@ function FinancialView({
 }: {
   invoices: Invoice[];
   onSave: (invoice: Invoice) => boolean | void;
-  onDelete: (id: string) => void;
   onOpenInvoice: (invoice: Invoice) => void;
   bankBalanceValue: number;
   onBankBalanceSave: (value: number) => void;
@@ -3180,6 +3245,7 @@ function FinancialView({
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
   const [settlementEntry, setSettlementEntry] = useState<FinancialEntry | null>(null);
+  const [detailEntry, setDetailEntry] = useState<FinancialEntry | null>(null);
   const [settlementHolder, setSettlementHolder] = useState("Itaú");
   const [settlementDiscount, setSettlementDiscount] = useState("R$ 0,00");
   const [settlementAddition, setSettlementAddition] = useState("R$ 0,00");
@@ -3276,12 +3342,31 @@ function FinancialView({
   ];
   const visiblePayables = listType === "receivable" ? [] : payables;
   const visibleReceivables = listType === "payable" ? [] : receivables;
+  const entryClosedPeriods = (entry: FinancialEntry, nextPaymentDate?: string) => {
+    const periods = [
+      entry.installment.dueDate,
+      entryPaymentDate(entry),
+      nextPaymentDate,
+    ]
+      .filter(Boolean)
+      .map((date) => String(date).slice(0, 7))
+      .filter((period, index, values) => period && values.indexOf(period) === index && isPeriodClosed(period));
+    return periods;
+  };
+  const ensureEntryOpen = (entry: FinancialEntry, nextPaymentDate?: string) => {
+    const closedPeriods = entryClosedPeriods(entry, nextPaymentDate);
+    if (!closedPeriods.length) return true;
+    window.alert(
+      `Este lançamento financeiro pertence a ${closedPeriods.map(periodLabel).join(" e ")}, competência já fechada. Desbloqueie o período em Fechamentos para continuar.`,
+    );
+    return false;
+  };
   const updateInstallment = (entry: FinancialEntry, changes: Partial<PaymentInstallment>) => {
     const installments = invoiceInstallments(entry.invoice).map((installment) =>
       installment.id === entry.installment.id ? { ...installment, ...changes } : installment,
     );
     const firstInstallment = installments[0];
-    onSave({
+    return onSave({
       ...entry.invoice,
       financialInstallments: installments,
       paid: installments.every((installment) => installment.paid),
@@ -3294,6 +3379,7 @@ function FinancialView({
     });
   };
   const openSettlement = (entry: FinancialEntry) => {
+    if (!ensureEntryOpen(entry)) return;
     setPaymentDates((current) => ({ ...current, [entry.id]: current[entry.id] || entryPaymentDate(entry) || today }));
     setFinancialNotes((current) => ({ ...current, [entry.id]: current[entry.id] ?? entryNotes(entry) ?? "" }));
     setSettlementHolder(entryHolder(entry));
@@ -3303,12 +3389,17 @@ function FinancialView({
   };
   const saveSettlement = (entry: FinancialEntry) => {
     const paymentDate = paymentDates[entry.id] || today;
+    if (!ensureEntryOpen(entry, paymentDate)) return;
     const notes = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
     const discountValue = cleanNumber(settlementDiscount);
     const additionValue = cleanNumber(settlementAddition);
     const settledValue = Math.max(entryAmount(entry) - discountValue + additionValue, 0);
-    if (!window.confirm(`Confirmar ${entry.kind === "receivable" ? "recebimento" : "pagamento"} deste lançamento?`)) return;
-    updateInstallment(entry, mode === "pf"
+    const movementLabel = entry.kind === "receivable" ? "recebimento" : "pagamento";
+    const confirmation = entryPaid(entry)
+      ? `Confirmar as alterações deste ${movementLabel}?`
+      : `Confirmar ${movementLabel} deste lançamento?`;
+    if (!window.confirm(confirmation)) return;
+    const saved = updateInstallment(entry, mode === "pf"
       ? {
           pfPaid: true,
           pfPaymentDate: paymentDate,
@@ -3327,9 +3418,10 @@ function FinancialView({
           settledValue,
           holder: settlementHolder,
         });
-    setSettlementEntry(null);
+    if (saved !== false) setSettlementEntry(null);
   };
   const reopenPayment = (entry: FinancialEntry) => {
+    if (!ensureEntryOpen(entry)) return;
     if (window.confirm("Tem certeza que deseja remover o pagamento deste lançamento?")) {
       updateInstallment(entry, mode === "pf"
         ? {
@@ -3353,6 +3445,11 @@ function FinancialView({
     }
   };
   const toggleConciled = (entry: FinancialEntry) => {
+    if (!entryPaid(entry)) {
+      window.alert("Concilie o título somente depois de registrar o pagamento ou recebimento.");
+      return;
+    }
+    if (!ensureEntryOpen(entry)) return;
     updateInstallment(entry, mode === "pf" ? { pfConciled: !entryConciled(entry) } : { conciled: !entryConciled(entry) });
   };
   const renderRows = (items: FinancialEntry[], partyLabel: string) => (
@@ -3385,14 +3482,25 @@ function FinancialView({
                 <input type="checkbox" checked={entryPaid(entry)} onChange={() => (entryPaid(entry) ? reopenPayment(entry) : openSettlement(entry))} />
               </td>
               <td>
-                <input type="checkbox" checked={entryConciled(entry)} onChange={() => toggleConciled(entry)} />
+                <input
+                  type="checkbox"
+                  checked={entryConciled(entry)}
+                  disabled={!entryPaid(entry)}
+                  title={entryPaid(entry) ? "Marcar como conciliado" : "Registre a liquidação antes de conciliar"}
+                  onChange={() => toggleConciled(entry)}
+                />
               </td>
               <td>
                 <details className="row-menu">
                   <summary title="Ações"><MoreVertical size={16} /></summary>
-                  <button type="button" onClick={() => onOpenInvoice(entry.invoice)}>Visualizar</button>
-                  <button type="button" onClick={() => onOpenInvoice(entry.invoice)}>Editar</button>
-                  <button type="button" onClick={() => window.confirm("Tem certeza que deseja excluir este lançamento?") && onDelete(entry.invoice.id)}>Excluir</button>
+                  <button type="button" onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    setDetailEntry(entry);
+                  }}>Ver lançamento</button>
+                  <button type="button" onClick={(event) => {
+                    event.currentTarget.closest("details")?.removeAttribute("open");
+                    openSettlement(entry);
+                  }}>Editar</button>
                 </details>
               </td>
             </tr>
@@ -3483,10 +3591,53 @@ function FinancialView({
       <section className="single-grid">
         <FinancePie title="Comparativo financeiro" data={comparisonFlowChart} />
       </section>
+      {detailEntry && (
+        <div className="modal-backdrop">
+          <section className="settlement-modal financial-detail-modal" role="dialog" aria-modal="true" aria-labelledby="financial-detail-title">
+            <div className="panel-heading">
+              <div>
+                <h2 id="financial-detail-title">Detalhes do lançamento</h2>
+                <p className="muted">Resumo financeiro da parcela selecionada.</p>
+              </div>
+              <button className="icon-btn" type="button" title="Fechar" onClick={() => setDetailEntry(null)}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="financial-detail-grid">
+              <div><span>Tipo</span><strong>{detailEntry.kind === "receivable" ? "Conta a receber" : "Conta a pagar"}</strong></div>
+              <div><span>Vencimento</span><strong>{formatDate(detailEntry.installment.dueDate)}</strong></div>
+              <div><span>{detailEntry.kind === "receivable" ? "Cliente" : "Fornecedor"}</span><strong>{detailEntry.invoice.partyName}</strong></div>
+              <div><span>Nota fiscal</span><strong>{detailEntry.invoice.invoiceNumber || "-"}</strong></div>
+              <div><span>Parcela</span><strong>{detailEntry.position}/{detailEntry.totalInstallments}</strong></div>
+              <div><span>Valor</span><strong>{formatCurrency(entryAmount(detailEntry))}</strong></div>
+              <div><span>Situação</span><strong>{entryPaid(detailEntry) ? "Liquidado" : "Em aberto"}</strong></div>
+              <div><span>Conciliação</span><strong>{entryConciled(detailEntry) ? "Conciliado" : "Não conciliado"}</strong></div>
+              <div><span>Forma de pagamento</span><strong>{detailEntry.installment.paymentCondition || "-"}</strong></div>
+              <div><span>Meio de pagamento</span><strong>{detailEntry.installment.paymentMethod || "-"}</strong></div>
+              <div><span>Portador</span><strong>{entryHolder(detailEntry)}</strong></div>
+              <div><span>{detailEntry.kind === "receivable" ? "Data de recebimento" : "Data de pagamento"}</span><strong>{entryPaymentDate(detailEntry) ? formatDate(entryPaymentDate(detailEntry)) : "-"}</strong></div>
+              <div><span>Desconto</span><strong>{formatCurrency(mode === "pf" ? detailEntry.installment.pfDiscountValue || 0 : detailEntry.installment.discountValue || 0)}</strong></div>
+              <div><span>Acréscimo</span><strong>{formatCurrency(mode === "pf" ? detailEntry.installment.pfAdditionValue || 0 : detailEntry.installment.additionValue || 0)}</strong></div>
+              <div className="wide"><span>Observações</span><strong>{entryNotes(detailEntry) || "-"}</strong></div>
+            </div>
+            <div className="form-actions inline settlement-actions">
+              <button className="btn ghost" type="button" onClick={() => setDetailEntry(null)}>Fechar</button>
+              <ActionButton icon={FileSearch} onClick={() => {
+                const invoice = detailEntry.invoice;
+                setDetailEntry(null);
+                onOpenInvoice(invoice);
+              }}>Ir para lançamento</ActionButton>
+            </div>
+          </section>
+        </div>
+      )}
       {settlementEntry && (
         <div className="modal-backdrop">
-          <section className="settlement-modal">
-            <h2>{settlementEntry.kind === "receivable" ? "Recebimento" : "Pagamento"}</h2>
+          <section className="settlement-modal" role="dialog" aria-modal="true" aria-labelledby="settlement-title">
+            <h2 id="settlement-title">
+              {entryPaid(settlementEntry) ? "Editar " : ""}
+              {settlementEntry.kind === "receivable" ? "recebimento" : "pagamento"}
+            </h2>
             <div className="settlement-grid">
               <label className="field">
                 <span>Vencimento *</span>
@@ -3533,7 +3684,9 @@ function FinancialView({
             </div>
             <div className="form-actions inline settlement-actions">
               <button className="btn ghost" type="button" onClick={() => setSettlementEntry(null)}>Cancelar</button>
-              <ActionButton icon={Save} onClick={() => saveSettlement(settlementEntry)}>Salvar</ActionButton>
+              <ActionButton icon={Save} onClick={() => saveSettlement(settlementEntry)}>
+                {entryPaid(settlementEntry) ? "Salvar alterações" : "Salvar"}
+              </ActionButton>
             </div>
           </section>
         </div>
@@ -4089,56 +4242,155 @@ function ChecksView({
   );
 }
 
-function BillFormView({
+function BillsView({
   invoices,
+  onNew,
+  onEdit,
+}: {
+  invoices: Invoice[];
+  onNew: () => void;
+  onEdit: (invoice: Invoice) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const billInvoices = useMemo(
+    () => invoices
+      .filter(isBillInvoice)
+      .filter((invoice) => !startDate || invoice.issueDate >= startDate)
+      .filter((invoice) => !endDate || invoice.issueDate <= endDate)
+      .filter((invoice) => searchMatches([
+        invoiceSearchText(invoice),
+        invoice.natureOperation,
+        invoice.costCenter,
+        ...invoiceInstallments(invoice).flatMap((installment) => [
+          installment.paymentCondition,
+          installment.paymentMethod,
+          installment.holder,
+          installment.dueDate,
+          installment.notes,
+          formatCurrency(installmentTotal(installment)),
+        ]),
+      ].join(" "), query))
+      .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a))),
+    [endDate, invoices, query, startDate],
+  );
+
+  return (
+    <div className="view-stack">
+      <section className="panel add-registration-panel">
+        <div>
+          <h2>Faturas</h2>
+          <p className="muted">Consulte títulos a pagar e a receber ou abra um novo lançamento.</p>
+        </div>
+        <ActionButton icon={Plus} onClick={onNew}>Nova Fatura</ActionButton>
+      </section>
+
+      <section className="panel">
+        <div className="filter-grid bill-filter-grid">
+          <label className="field free-search-field">
+            <span>Pesquisa livre</span>
+            <div className="search-input-control">
+              <Search size={17} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Título, fornecedor, valor, portador..."
+              />
+            </div>
+          </label>
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-title between">
+          <h2>Faturas lançadas</h2>
+          <span className="muted">{billInvoices.length} encontrada(s)</span>
+        </div>
+        <div className="table-wrap">
+          <table className="static-table">
+            <thead>
+              <tr>
+                <th>Tipo</th>
+                <th>Série</th>
+                <th>Título</th>
+                <th>Cliente/Fornecedor</th>
+                <th>Emissão</th>
+                <th>Vencimento</th>
+                <th>Valor</th>
+                <th>Status</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {billInvoices.map((invoice) => (
+                <tr key={invoice.id}>
+                  <td>{billFinancialKind(invoice) === "receivable" ? "A receber" : "A pagar"}</td>
+                  <td>{invoice.natureOperation}</td>
+                  <td>{invoice.invoiceNumber}</td>
+                  <td>{invoice.partyName}</td>
+                  <td>{formatDate(invoice.issueDate)}</td>
+                  <td>{formatDate(invoice.dueDate)}</td>
+                  <td>{formatCurrency(invoiceFinancialAmount(invoice))}</td>
+                  <td><Badge value={invoice.paid ? "Paga" : "Em aberto"} /></td>
+                  <td>
+                    <button className="icon-btn" type="button" title="Editar fatura" onClick={() => onEdit(invoice)}>
+                      <Pencil size={15} />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {!billInvoices.length && (
+                <tr>
+                  <td colSpan={9}>Nenhuma fatura encontrada.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BillFormView({
+  editingBill,
   parties,
   onSave,
   onDelete,
   onAddParty,
+  onDone,
 }: {
-  invoices: Invoice[];
+  editingBill: Invoice | null;
   parties: Party[];
   onSave: (invoice: Invoice) => boolean | void;
   onDelete: (id: string) => void;
   onAddParty: (kind: Party["kind"]) => void;
+  onDone: () => void;
 }) {
-  const [entryType, setEntryType] = useState<"payable" | "receivable">("payable");
-  const [series, setSeries] = useState<"Fatura" | "Recibo">("Fatura");
-  const [selectedParty, setSelectedParty] = useState<Party | undefined>();
-  const [editingBill, setEditingBill] = useState<Invoice | null>(null);
-  const [installmentIndexes, setInstallmentIndexes] = useState([0]);
-  const [totalValue, setTotalValue] = useState("R$ 0,00");
-  const [installmentsTotal, setInstallmentsTotal] = useState(0);
+  const initialKind = editingBill ? billFinancialKind(editingBill) || "payable" : "payable";
+  const [entryType, setEntryType] = useState<"payable" | "receivable">(initialKind);
+  const [series, setSeries] = useState<"Fatura" | "Recibo">(editingBill?.natureOperation === "Recibo" ? "Recibo" : "Fatura");
+  const [selectedParty, setSelectedParty] = useState<Party | undefined>(() => parties.find((party) =>
+    party.kind === (initialKind === "payable" ? "supplier" : "customer") &&
+    (party.name === editingBill?.partyName || party.cnpj === editingBill?.partyCnpj),
+  ));
+  const [installmentIndexes, setInstallmentIndexes] = useState(() => editingBill ? invoiceInstallments(editingBill).map((_, index) => index) : [0]);
+  const [totalValue, setTotalValue] = useState(() => formatCurrency(editingBill?.totalInvoice || 0));
+  const [installmentsTotal, setInstallmentsTotal] = useState(() => editingBill ? invoiceInstallments(editingBill).reduce((total, installment) => total + installmentTotal(installment), 0) : 0);
   const partyKind: Party["kind"] = entryType === "payable" ? "supplier" : "customer";
-  const billInvoices = invoices
-    .filter(isBillInvoice)
-    .sort((a, b) => invoiceDate(b).localeCompare(invoiceDate(a)));
 
   useEffect(() => {
     if (selectedParty && selectedParty.kind !== partyKind) setSelectedParty(undefined);
   }, [partyKind, selectedParty]);
-
-  const startNew = () => {
-    setEditingBill(null);
-    setEntryType("payable");
-    setSeries("Fatura");
-    setSelectedParty(undefined);
-    setInstallmentIndexes([0]);
-    setTotalValue("R$ 0,00");
-    setInstallmentsTotal(0);
-  };
-
-  const editBill = (invoice: Invoice) => {
-    if (!window.confirm("Tem certeza que deseja alterar esta fatura?")) return;
-    const kind = billFinancialKind(invoice) || "payable";
-    setEditingBill(invoice);
-    setEntryType(kind);
-    setSeries(invoice.natureOperation === "Recibo" ? "Recibo" : "Fatura");
-    setSelectedParty(parties.find((party) => party.kind === (kind === "payable" ? "supplier" : "customer") && (party.name === invoice.partyName || party.cnpj === invoice.partyCnpj)));
-    setInstallmentIndexes(invoiceInstallments(invoice).map((_, index) => index));
-    setTotalValue(formatCurrency(invoice.totalInvoice || 0));
-    setInstallmentsTotal(invoiceInstallments(invoice).reduce((total, installment) => total + installmentTotal(installment), 0));
-  };
 
   const updateInstallmentSummary = (form: HTMLFormElement) => {
     const data = new FormData(form);
@@ -4267,7 +4519,7 @@ function BillFormView({
 
     const saved = onSave(invoice);
     if (saved === false) return;
-    startNew();
+    onDone();
   };
 
   return (
@@ -4275,9 +4527,7 @@ function BillFormView({
       <section className="panel">
         <div className="panel-title between">
           <h2>{editingBill ? "Alterar fatura" : "Lançamento de faturas"}</h2>
-          {editingBill && (
-            <ActionButton icon={X} variant="ghost" onClick={startNew}>Cancelar</ActionButton>
-          )}
+          <ActionButton icon={X} variant="ghost" onClick={onDone}>Cancelar</ActionButton>
         </div>
         <form className="view-stack" onSubmit={submitBill} onInput={(event) => updateInstallmentSummary(event.currentTarget)}>
           <div className="form-grid">
@@ -4372,7 +4622,7 @@ function BillFormView({
                 onClick={() => {
                   if (!window.confirm("Tem certeza que deseja excluir esta fatura?")) return;
                   onDelete(editingBill.id);
-                  startNew();
+                  onDone();
                 }}
               >
                 Excluir fatura
@@ -4382,46 +4632,6 @@ function BillFormView({
         </form>
       </section>
 
-      <section className="panel">
-        <h2>Faturas lançadas</h2>
-        <table className="static-table">
-          <thead>
-            <tr>
-              <th>Tipo</th>
-              <th>Série</th>
-              <th>Título</th>
-              <th>Cliente/Fornecedor</th>
-              <th>Vencimento</th>
-              <th>Valor</th>
-              <th>Status</th>
-              <th>Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {billInvoices.map((invoice) => (
-              <tr key={invoice.id}>
-                <td>{billFinancialKind(invoice) === "receivable" ? "A receber" : "A pagar"}</td>
-                <td>{invoice.natureOperation}</td>
-                <td>{invoice.invoiceNumber}</td>
-                <td>{invoice.partyName}</td>
-                <td>{formatDate(invoice.dueDate)}</td>
-                <td>{formatCurrency(invoiceFinancialAmount(invoice))}</td>
-                <td><Badge value={invoice.paid ? "Paga" : "Em aberto"} /></td>
-                <td>
-                  <button className="icon-btn" type="button" title="Editar" onClick={() => editBill(invoice)}>
-                    <Pencil size={15} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {!billInvoices.length && (
-              <tr>
-                <td colSpan={8}>Nenhuma fatura lançada.</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
     </div>
   );
 }
@@ -4740,17 +4950,31 @@ function FinancePie({ title, data }: { title: string; data: Array<{ name: string
   return (
     <section className="panel chart-panel compact-chart">
       <h2>{title}</h2>
-      <ResponsiveContainer width="100%" height={220}>
-        <PieChart>
-          <Pie data={chartData} dataKey="value" nameKey="name" outerRadius={68}>
-            {chartData.map((entry) => (
-              <Cell key={entry.name} fill={entry.color} />
-            ))}
-          </Pie>
-          <Tooltip formatter={(value) => formatCurrency(Number(value))} />
-          <Legend />
-        </PieChart>
-      </ResponsiveContainer>
+      <div className="finance-comparison-layout">
+        <div className="finance-comparison-chart">
+          <ResponsiveContainer width="100%" height={220}>
+            <PieChart>
+              <Pie data={chartData} dataKey="value" nameKey="name" outerRadius={72}>
+                {chartData.map((entry) => (
+                  <Cell key={entry.name} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(value) => formatCurrency(Number(value))} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="finance-comparison-values" aria-label="Totais do comparativo financeiro">
+          {data.map((entry) => (
+            <article key={entry.name}>
+              <span className="finance-comparison-swatch" style={{ backgroundColor: entry.color }} />
+              <div>
+                <span>{entry.name}</span>
+                <strong>{formatCurrency(entry.value)}</strong>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
@@ -4769,18 +4993,46 @@ function AssetsView({
 }) {
   const [showForm, setShowForm] = useState(false);
   const [editingAsset, setEditingAsset] = useState<AssetItem | null>(null);
+  const [viewingAsset, setViewingAsset] = useState<AssetItem | null>(null);
+  const [showSoldAssets, setShowSoldAssets] = useState(false);
   const [selectedAssetType, setSelectedAssetType] = useState(editingAsset?.itemType || "");
-  const visibleAssets = assets.filter((asset) => !asset.archived);
+  const [selectedSituation, setSelectedSituation] = useState<AssetItem["situation"]>("Próprio");
+  const visibleAssets = assets.filter((asset) => !asset.archived && asset.situation !== "Vendido");
+  const soldAssets = assets.filter((asset) => asset.archived || asset.situation === "Vendido");
   const groupedAssets = assetTypeOptions.map((type) => ({
     type,
     items: visibleAssets.filter((asset) => asset.itemType === type),
   }));
 
+  function openNew() {
+    setEditingAsset(null);
+    setViewingAsset(null);
+    setSelectedAssetType("");
+    setSelectedSituation("Próprio");
+    setShowForm(true);
+  }
+
+  function openView(asset: AssetItem) {
+    setShowForm(false);
+    setEditingAsset(null);
+    setViewingAsset(asset);
+  }
+
   function openEdit(asset: AssetItem) {
     if (!window.confirm("Tem certeza que deseja alterar este patrimônio?")) return;
+    setViewingAsset(null);
     setEditingAsset(asset);
     setSelectedAssetType(asset.itemType);
+    setSelectedSituation(asset.situation || (asset.archived ? "Vendido" : "Próprio"));
     setShowForm(true);
+  }
+
+  function closeAssetPanel() {
+    setShowForm(false);
+    setEditingAsset(null);
+    setViewingAsset(null);
+    setSelectedAssetType("");
+    setSelectedSituation("Próprio");
   }
 
   function saveAsset(event: FormEvent<HTMLFormElement>) {
@@ -4789,6 +5041,7 @@ function AssetsView({
     const now = new Date().toISOString();
     const registrationNumber = String(form.get("registrationNumber") || "");
     const registrationKinds = ["Matrícula", "Escritura", "CCIR"].filter((kind) => form.get(`registration${kind}`) === "on");
+    const situation = String(form.get("situation") || "Próprio") as AssetItem["situation"];
     const asset: AssetItem = {
       id: editingAsset?.id || newId("asset"),
       itemType: String(form.get("itemType") || ""),
@@ -4797,31 +5050,31 @@ function AssetsView({
       acquisitionValue: cleanNumber(form.get("acquisitionValue")),
       plate: assetTypesWithPlate.has(String(form.get("itemType") || "")) ? String(form.get("plate") || "") : "",
       registrationNumber: registrationKinds.length && registrationNumber ? `${registrationKinds.join(" / ")}: ${registrationNumber}` : registrationNumber,
-      archived: editingAsset?.archived || false,
+      situation,
+      status: situation === "Vendido" ? undefined : String(form.get("status") || "Em uso") as AssetItem["status"],
+      notes: String(form.get("notes") || "").trim(),
+      archived: situation === "Vendido",
       createdAt: editingAsset?.createdAt || now,
       updatedAt: now,
     };
 
     onSave(asset);
-    setEditingAsset(null);
-    setShowForm(false);
+    closeAssetPanel();
     event.currentTarget.reset();
   }
 
-  function archiveAsset() {
+  function markAsSold() {
     if (!editingAsset) return;
-    if (!window.confirm("Tem certeza que deseja arquivar este patrimônio vendido?")) return;
-    onSave({ ...editingAsset, archived: true, updatedAt: new Date().toISOString() });
-    setEditingAsset(null);
-    setShowForm(false);
+    if (!window.confirm("Tem certeza que deseja marcar este patrimônio como vendido?")) return;
+    onSave({ ...editingAsset, situation: "Vendido", status: undefined, archived: true, updatedAt: new Date().toISOString() });
+    closeAssetPanel();
   }
 
   function deleteAsset() {
     if (!editingAsset) return;
     if (!window.confirm("Tem certeza que deseja excluir definitivamente este patrimônio?")) return;
     onDelete(editingAsset.id);
-    setEditingAsset(null);
-    setShowForm(false);
+    closeAssetPanel();
   }
 
   return (
@@ -4832,19 +5085,38 @@ function AssetsView({
             <Building2 size={20} />
             <h2>Módulo patrimonial</h2>
           </div>
-          <button
-            className="add-card compact-card"
-            type="button"
-            onClick={() => {
-              setEditingAsset(null);
-              setSelectedAssetType("");
-              setShowForm((current) => !current);
-            }}
-          >
-            <Plus size={20} />
-            <strong>Adicionar/alterar</strong>
-          </button>
+          <div className="asset-header-actions">
+            <ActionButton icon={Archive} variant="ghost" onClick={() => setShowSoldAssets((current) => !current)}>
+              {showSoldAssets ? "Ocultar vendidos" : `Itens vendidos (${soldAssets.length})`}
+            </ActionButton>
+            <ActionButton icon={Plus} onClick={openNew}>Adicionar</ActionButton>
+          </div>
         </div>
+        {viewingAsset && (
+          <article className="asset-detail-panel">
+            <div className="panel-title between">
+              <div>
+                <span className="eyebrow">Detalhes do patrimônio</span>
+                <h2>{viewingAsset.itemName}</h2>
+              </div>
+              <button className="icon-btn" type="button" title="Fechar detalhes" onClick={closeAssetPanel}><X size={18} /></button>
+            </div>
+            <div className="asset-detail-grid">
+              <div><span>Tipo do item</span><strong>{viewingAsset.itemType}</strong></div>
+              <div><span>Situação</span><strong>{viewingAsset.situation}</strong></div>
+              {viewingAsset.situation !== "Vendido" && <div><span>Status</span><strong>{viewingAsset.status || "Em uso"}</strong></div>}
+              <div><span>Data de aquisição</span><strong>{formatDate(viewingAsset.acquisitionDate)}</strong></div>
+              <div><span>Valor de aquisição</span><strong>{formatCurrency(viewingAsset.acquisitionValue)}</strong></div>
+              {viewingAsset.plate && <div><span>Placa</span><strong>{viewingAsset.plate}</strong></div>}
+              {viewingAsset.registrationNumber && <div><span>Matrícula, escritura ou CCIR</span><strong>{viewingAsset.registrationNumber}</strong></div>}
+              <div className="wide"><span>Observações</span><strong>{viewingAsset.notes || "Nenhuma observação informada."}</strong></div>
+            </div>
+            <div className="form-actions inline">
+              <ActionButton icon={Pencil} onClick={() => openEdit(viewingAsset)}>Editar</ActionButton>
+              <ActionButton icon={X} variant="ghost" onClick={closeAssetPanel}>Fechar</ActionButton>
+            </div>
+          </article>
+        )}
         {showForm && (
           <form className="form-grid" onSubmit={saveAsset}>
             <label className="field">
@@ -4864,6 +5136,20 @@ function AssetsView({
             <Field label="Nome do item" name="itemName" defaultValue={editingAsset?.itemName || ""} required />
             <Field label="Data de aquisição" name="acquisitionDate" type="date" defaultValue={editingAsset?.acquisitionDate || todayIso()} required />
             <MoneyField label="Valor de aquisição" name="acquisitionValue" defaultValue={formatCurrency(editingAsset?.acquisitionValue || 0)} />
+            <label className="field">
+              <span>Situação</span>
+              <select name="situation" value={selectedSituation} onChange={(event) => setSelectedSituation(event.target.value as AssetItem["situation"])}>
+                {(["Próprio", "Alugado", "Vendido"] as AssetItem["situation"][]).map((option) => <option key={option}>{option}</option>)}
+              </select>
+            </label>
+            {selectedSituation !== "Vendido" && (
+              <label className="field">
+                <span>Status</span>
+                <select name="status" defaultValue={editingAsset?.status || "Em uso"}>
+                  {(["Em uso", "Locado", "Empréstimo"] as NonNullable<AssetItem["status"]>[]).map((option) => <option key={option}>{option}</option>)}
+                </select>
+              </label>
+            )}
             {assetTypesWithPlate.has(selectedAssetType) && <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />}
             <label className="field registration-field">
               <span>Número da matrícula, escritura ou CCIR</span>
@@ -4877,6 +5163,10 @@ function AssetsView({
                 ))}
               </div>
             </label>
+            <label className="field span-4 asset-notes-field">
+              <span>Observações</span>
+              <textarea name="notes" defaultValue={editingAsset?.notes || ""} placeholder="Informações complementares sobre o patrimônio" />
+            </label>
             <div className="form-actions inline">
               <ActionButton icon={Save} type="submit">
                 {editingAsset ? "Salvar alteração" : "Salvar patrimônio"}
@@ -4886,22 +5176,17 @@ function AssetsView({
                   <ActionButton
                     icon={X}
                     variant="ghost"
-                    onClick={() => {
-                      setEditingAsset(null);
-                      setSelectedAssetType("");
-                      setShowForm(false);
-                    }}
+                    onClick={closeAssetPanel}
                   >
                     Cancelar
                   </ActionButton>
-                  <ActionButton icon={Archive} variant="ghost" onClick={archiveAsset}>
-                    Arquivar item
-                  </ActionButton>
+                  {editingAsset.situation !== "Vendido" && <ActionButton icon={Archive} variant="ghost" onClick={markAsSold}>Marcar como vendido</ActionButton>}
                   <ActionButton icon={X} variant="danger" onClick={deleteAsset}>
                     Excluir item
                   </ActionButton>
                 </>
               )}
+              {!editingAsset && <ActionButton icon={X} variant="ghost" onClick={closeAssetPanel}>Cancelar</ActionButton>}
             </div>
           </form>
         )}
@@ -4919,13 +5204,15 @@ function AssetsView({
                   <div>
                     <strong>{asset.itemName}</strong>
                     <span>{formatDate(asset.acquisitionDate)} · {formatCurrency(asset.acquisitionValue)}</span>
+                    <small>{asset.situation} · {asset.status || "Em uso"}</small>
                     {(asset.plate || asset.registrationNumber) && (
                       <small>{asset.plate ? `Placa: ${asset.plate}` : ""}{asset.plate && asset.registrationNumber ? " | " : ""}{asset.registrationNumber ? `Matrícula: ${asset.registrationNumber}` : ""}</small>
                     )}
                   </div>
-                  <button className="icon-btn" type="button" title="Editar patrimônio" onClick={() => openEdit(asset)}>
-                    <Pencil size={16} />
-                  </button>
+                  <details className="row-menu asset-row-menu">
+                    <summary title="Ações"><MoreVertical size={16} /></summary>
+                    <button type="button" onClick={() => openView(asset)}>Visualizar</button>
+                  </details>
                 </article>
               ))}
               {!items.length && <p className="muted">Nenhum item ativo.</p>}
@@ -4933,6 +5220,27 @@ function AssetsView({
           </section>
         ))}
       </div>
+      {showSoldAssets && (
+        <section className="panel sold-assets-panel">
+          <div className="panel-title between"><h2>Itens vendidos</h2><span className="asset-count">{soldAssets.length}</span></div>
+          <div className="asset-list sold-assets-list">
+            {soldAssets.map((asset) => (
+              <article className="asset-card sold-asset-card" key={asset.id}>
+                <div>
+                  <strong>{asset.itemName}</strong>
+                  <span>{asset.itemType} · {formatDate(asset.acquisitionDate)} · {formatCurrency(asset.acquisitionValue)}</span>
+                  <small>Vendido</small>
+                </div>
+                <details className="row-menu asset-row-menu">
+                  <summary title="Ações"><MoreVertical size={16} /></summary>
+                  <button type="button" onClick={() => openView(asset)}>Visualizar</button>
+                </details>
+              </article>
+            ))}
+            {!soldAssets.length && <p className="muted">Nenhum item vendido.</p>}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
@@ -5062,14 +5370,14 @@ function RegistrationsView({
   registryParties,
   setRegistryParties,
   canEdit,
-  initialKind = "customer",
+  initialKind,
 }: {
   registryParties: Party[];
   setRegistryParties: (value: Party[] | ((current: Party[]) => Party[])) => void;
   canEdit: boolean;
   initialKind?: Party["kind"];
 }) {
-  const [showAdd, setShowAdd] = useState(Boolean(initialKind));
+  const [showAdd, setShowAdd] = useState(false);
   const [addKind, setAddKind] = useState<Party["kind"]>(initialKind || "customer");
   const [selectedKind, setSelectedKind] = useState<Party["kind"]>(initialKind || "customer");
   const [searchField, setSearchField] = useState<"cnpj" | "name" | "city" | "state" | "email" | "phone">("name");
@@ -5092,6 +5400,13 @@ function RegistrationsView({
     const value = String(party[searchField] || "");
     return searchMatches(value, searchQuery);
   });
+
+  useEffect(() => {
+    if (!initialKind) return;
+    setAddKind(initialKind);
+    setSelectedKind(initialKind);
+    setShowAdd(true);
+  }, [initialKind]);
 
   function addParty(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5125,7 +5440,10 @@ function RegistrationsView({
           <p className="muted">Clientes, fornecedores e transportadoras usados nas notas fiscais.</p>
         </div>
         {canEdit && (
-          <button className="add-card" type="button" onClick={() => setShowAdd((current) => !current)}>
+          <button className="add-card" type="button" onClick={() => {
+            setAddKind(selectedKind);
+            setShowAdd(true);
+          }}>
             <Plus size={22} />
             <strong>Adicionar</strong>
           </button>
@@ -5134,7 +5452,10 @@ function RegistrationsView({
 
       {showAdd && (
         <section className="panel">
-          <h2>Novo cadastro</h2>
+          <div className="panel-title between">
+            <h2>Novo cadastro</h2>
+            <ActionButton icon={X} variant="ghost" onClick={() => setShowAdd(false)}>Cancelar</ActionButton>
+          </div>
           <form className="form-grid" onSubmit={addParty}>
             <label className="field">
               <span>Tipo</span>
@@ -5275,17 +5596,25 @@ function ProductsView({
   invoices,
   products,
   onSave,
-  onDelete,
   canEdit,
 }: {
   invoices: Invoice[];
   products: ProductItem[];
   onSave: (product: ProductItem) => void;
-  onDelete: (id: string) => void;
   canEdit: boolean;
 }) {
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
+  const [showForm, setShowForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const autoRegisteredProducts = useRef(new Set<string>());
+  const filteredProducts = useMemo(() => products.filter((product) => searchMatches([
+    product.code,
+    product.name,
+    product.ncm,
+    product.defaultCostCenter,
+    product.defaultUnit,
+    product.active ? "ativo" : "arquivado",
+  ].join(" "), searchQuery)), [products, searchQuery]);
   const issuedProductSuggestions = useMemo(() => {
     const catalog = new Map<string, Omit<ProductItem, "id" | "createdAt" | "updatedAt">>();
     invoices
@@ -5341,17 +5670,27 @@ function ProductsView({
       code: String(form.get("code") || "").trim(),
       ncm: onlyDigits(String(form.get("ncm") || "")),
       defaultCostCenter: String(form.get("defaultCostCenter") || ""),
-      defaultCategory: String(form.get("defaultCategory") || ""),
+      defaultCategory: editingProduct?.defaultCategory || "",
       defaultUnit: String(form.get("defaultUnit") || "UN"),
       accountingAccount: "",
       color: "",
-      active: form.get("active") === "on",
+      active: editingProduct?.active ?? true,
       createdAt: editingProduct?.createdAt || now,
       updatedAt: now,
     });
     setEditingProduct(null);
+    setShowForm(false);
     event.currentTarget.reset();
   }
+
+  const toggleArchive = () => {
+    if (!editingProduct) return;
+    const action = editingProduct.active ? "arquivar" : "reativar";
+    if (!window.confirm(`Tem certeza que deseja ${action} este produto?`)) return;
+    onSave({ ...editingProduct, active: !editingProduct.active, updatedAt: new Date().toISOString() });
+    setEditingProduct(null);
+    setShowForm(false);
+  };
 
   return (
     <div className="view-stack">
@@ -5360,62 +5699,79 @@ function ProductsView({
           <h2>Cadastro de Produtos</h2>
           <p className="muted">Produtos vendidos usados nas notas emitidas. Variações como medidas e blocos continuam no lançamento da nota.</p>
         </div>
+        {canEdit && (
+          <ActionButton icon={Plus} onClick={() => {
+            setEditingProduct(null);
+            setShowForm(true);
+          }}>Adicionar</ActionButton>
+        )}
       </section>
 
-      {canEdit && (
+      {canEdit && showForm && (
         <section className="panel" key={editingProduct?.id || "new-product"}>
           <div className="panel-title between">
             <h2>{editingProduct ? "Alterar produto" : "Novo produto"}</h2>
-            {editingProduct && (
-              <ActionButton icon={X} variant="ghost" onClick={() => setEditingProduct(null)}>
-                Cancelar
-              </ActionButton>
-            )}
+            <ActionButton icon={X} variant="ghost" onClick={() => {
+              setEditingProduct(null);
+              setShowForm(false);
+            }}>Cancelar</ActionButton>
           </div>
           <form className="form-grid" onSubmit={saveProduct}>
-            <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
             <Field label="Código do produto" name="code" defaultValue={editingProduct?.code || ""} />
+            <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
             <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
             <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
-            <Field label="Categoria padrão" name="defaultCategory" options={fiscalConfig.categories} defaultValue={editingProduct?.defaultCategory || ""} />
             <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
-            <label className="check align-end">
-              <input name="active" type="checkbox" defaultChecked={editingProduct?.active ?? true} />
-              Produto ativo
-            </label>
             <div className="form-actions inline">
               <ActionButton icon={Save} type="submit">
                 Salvar produto
               </ActionButton>
+              {editingProduct && (
+                <ActionButton icon={Archive} variant={editingProduct.active ? "danger" : "ghost"} onClick={toggleArchive}>
+                  {editingProduct.active ? "Arquivar produto" : "Reativar produto"}
+                </ActionButton>
+              )}
             </div>
           </form>
         </section>
       )}
 
       <section className="panel">
-        <h2>Produtos cadastrados</h2>
+        <div className="panel-title between">
+          <h2>Produtos cadastrados</h2>
+          <span className="muted">{filteredProducts.length} encontrado(s)</span>
+        </div>
+        <label className="field product-free-search">
+          <span>Pesquisa livre</span>
+          <div className="search-input-control">
+            <Search size={17} />
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Código, produto, NCM, centro de custo..."
+            />
+          </div>
+        </label>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Produto</th>
                 <th>Código do produto</th>
+                <th>Produto</th>
                 <th>NCM</th>
                 <th>Centro de custo padrão</th>
-                <th>Categoria</th>
                 <th>Unidade</th>
                 <th>Ativo</th>
                 {canEdit && <th>Ações</th>}
               </tr>
             </thead>
             <tbody>
-              {products.map((product) => (
+              {filteredProducts.map((product) => (
                 <tr key={product.id}>
-                  <td>{product.name}</td>
                   <td>{product.code}</td>
+                  <td>{product.name}</td>
                   <td>{product.ncm}</td>
                   <td>{product.defaultCostCenter}</td>
-                  <td>{product.defaultCategory}</td>
                   <td>{product.defaultUnit}</td>
                   <td>{product.active ? "Sim" : "Não"}</td>
                   {canEdit && (
@@ -5428,26 +5784,19 @@ function ProductsView({
                           onClick={() => {
                             if (!window.confirm("Tem certeza que deseja editar este produto?")) return;
                             setEditingProduct(product);
+                            setShowForm(true);
                           }}
                         >
                           <Pencil size={16} />
-                        </button>
-                        <button
-                          className="icon-btn danger"
-                          title="Excluir produto"
-                          type="button"
-                          onClick={() => window.confirm("Tem certeza que deseja excluir este produto?") && onDelete(product.id)}
-                        >
-                          <X size={16} />
                         </button>
                       </div>
                     </td>
                   )}
                 </tr>
               ))}
-              {!products.length && (
+              {!filteredProducts.length && (
                 <tr>
-                  <td colSpan={canEdit ? 8 : 7}>Nenhum produto cadastrado.</td>
+                  <td colSpan={canEdit ? 7 : 6}>Nenhum produto encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -5783,9 +6132,9 @@ export default function App() {
   const title = useMemo(() => viewTitles.find((item) => item.id === view)?.label || "Dashboard", [view]);
   const canEdit = true;
   const bankBalanceValue = useMemo(() => fiscalConfig.bankBalance || 0, [configVersion]);
-  const [financeMenuOpen, setFinanceMenuOpen] = useState(true);
-  const [notesMenuOpen, setNotesMenuOpen] = useState(true);
-  const [fiscalMenuOpen, setFiscalMenuOpen] = useState(true);
+  const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
+  const [notesMenuOpen, setNotesMenuOpen] = useState(false);
+  const [fiscalMenuOpen, setFiscalMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -5905,6 +6254,11 @@ export default function App() {
     setEditingInvoice(null);
     setView(nextView);
   };
+  const openBillForm = (invoice?: Invoice) => {
+    if (invoice && !window.confirm("Tem certeza que deseja alterar esta fatura?")) return;
+    setEditingInvoice(invoice || null);
+    setView("new-bill");
+  };
   const openRegistration = (kind: Party["kind"]) => {
     setRegistrationKind(kind);
     setEditingInvoice(null);
@@ -5918,15 +6272,27 @@ export default function App() {
     return false;
   };
   const guardedSaveInvoice = (invoice: Invoice) => {
-    const periods = new Set([invoicePeriodKey(invoice)]);
     const previous = store.invoices.find((item) => item.id === invoice.id);
-    if (previous) periods.add(invoicePeriodKey(previous));
-    if (![...periods].every(ensurePeriodOpen)) return false;
-    if (
-      previous &&
-      invoiceHasPostedPayments(previous) &&
-      invoiceDataSnapshot(previous) !== invoiceDataSnapshot(invoice)
-    ) {
+    const invoiceDataChanged = previous && invoiceDataSnapshot(previous) !== invoiceDataSnapshot(invoice);
+    if (previous && !invoiceDataChanged) {
+      const previousById = new Map(invoiceInstallments(previous).map((installment) => [installment.id, installment]));
+      const changedInstallments = invoiceInstallments(invoice).filter((installment) =>
+        JSON.stringify(previousById.get(installment.id)) !== JSON.stringify(installment),
+      );
+      const financialPeriods = new Set<string>();
+      changedInstallments.forEach((installment) => {
+        const prior = previousById.get(installment.id);
+        [installment.dueDate, installment.paymentDate, installment.pfPaymentDate, prior?.dueDate, prior?.paymentDate, prior?.pfPaymentDate]
+          .filter(Boolean)
+          .forEach((date) => financialPeriods.add(String(date).slice(0, 7)));
+      });
+      if (![...financialPeriods].every(ensurePeriodOpen)) return false;
+    } else {
+      const periods = new Set([invoicePeriodKey(invoice)]);
+      if (previous) periods.add(invoicePeriodKey(previous));
+      if (![...periods].every(ensurePeriodOpen)) return false;
+    }
+    if (previous && invoiceHasPostedPayments(previous) && invoiceDataChanged) {
       window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de alterar a nota.");
       return false;
     }
@@ -6045,14 +6411,6 @@ export default function App() {
               </div>
             )}
           </div>
-          <button className={view === "dre" ? "active" : ""} onClick={() => { setView("dre"); setSidebarOpen(false); }}>
-            <BarChart3 size={18} />
-            DRE
-          </button>
-          <button className={view === "assets" ? "active" : ""} onClick={() => { setView("assets"); setSidebarOpen(false); }}>
-            <Building2 size={18} />
-            Patrimônio
-          </button>
           <div className="nav-group">
             <button
               className={noteViewIds.has(view) ? "active" : ""}
@@ -6065,13 +6423,13 @@ export default function App() {
             {notesMenuOpen && (
               <div className="nav-submenu">
                 {noteViews
-                  .filter(({ id }) => canEdit || (id !== "new-issued" && id !== "new-received"))
+                  .filter(({ id }) => canEdit || (id !== "new-issued" && id !== "new-received" && id !== "new-bill"))
                   .map(({ id: childId, label: childLabel, icon: ChildIcon }) => (
                     <button
                       key={childId}
                       className={view === childId ? "active" : ""}
                       onClick={() => {
-                        if (childId === "new-issued" || childId === "new-received") setEditingInvoice(null);
+                        if (childId === "new-issued" || childId === "new-received" || childId === "new-bill") setEditingInvoice(null);
                         setView(childId);
                         setSidebarOpen(false);
                       }}
@@ -6110,9 +6468,13 @@ export default function App() {
               </div>
             )}
           </div>
-          <button className={view === "closures" ? "active" : ""} onClick={() => { setView("closures"); setSidebarOpen(false); }}>
-            <Lock size={18} />
-            Fechamentos
+          <button className={view === "dre" ? "active" : ""} onClick={() => { setView("dre"); setSidebarOpen(false); }}>
+            <BarChart3 size={18} />
+            DRE
+          </button>
+          <button className={view === "assets" ? "active" : ""} onClick={() => { setView("assets"); setSidebarOpen(false); }}>
+            <Building2 size={18} />
+            Patrimônio
           </button>
           <button className={view === "registrations" ? "active" : ""} onClick={() => { setRegistrationKind(undefined); setView("registrations"); setSidebarOpen(false); }}>
             <Building2 size={18} />
@@ -6231,7 +6593,6 @@ export default function App() {
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
-              onDelete={guardedDeleteInvoice}
               onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
@@ -6242,7 +6603,6 @@ export default function App() {
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
-              onDelete={guardedDeleteInvoice}
               onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
@@ -6253,7 +6613,6 @@ export default function App() {
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
-              onDelete={guardedDeleteInvoice}
               onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
@@ -6265,7 +6624,6 @@ export default function App() {
             <FinancialView
               invoices={store.invoices}
               onSave={guardedSaveInvoice}
-              onDelete={guardedDeleteInvoice}
               onOpenInvoice={openInvoiceForm}
               bankBalanceValue={bankBalanceValue}
               onBankBalanceSave={saveBankBalance}
@@ -6275,12 +6633,23 @@ export default function App() {
           )}
           {view === "checks" && <ChecksView checks={store.checks} onSave={store.saveCheck} onDelete={store.deleteCheck} />}
           {view === "bills" && (
-            <BillFormView
+            <BillsView
               invoices={store.invoices}
+              onNew={() => openBillForm()}
+              onEdit={openBillForm}
+            />
+          )}
+          {view === "new-bill" && canEdit && (
+            <BillFormView
+              editingBill={editingInvoice && isBillInvoice(editingInvoice) ? editingInvoice : null}
               parties={registryParties}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onAddParty={openRegistration}
+              onDone={() => {
+                setEditingInvoice(null);
+                setView("bills");
+              }}
             />
           )}
           {view === "cash" && (
@@ -6305,7 +6674,6 @@ export default function App() {
               invoices={store.invoices}
               products={store.products}
               onSave={store.saveProduct}
-              onDelete={store.deleteProduct}
               canEdit={canEdit}
             />
           )}

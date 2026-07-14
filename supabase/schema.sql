@@ -173,10 +173,42 @@ create table if not exists public.assets (
   acquisition_value numeric(14, 2) not null default 0,
   plate text,
   registration_number text,
+  situation text not null default 'Próprio' check (situation in ('Próprio', 'Alugado', 'Vendido')),
+  status text check (status is null or status in ('Em uso', 'Locado', 'Empréstimo')),
+  notes text,
   archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.assets
+  add column if not exists situation text not null default 'Próprio',
+  add column if not exists status text,
+  add column if not exists notes text;
+
+update public.assets
+set situation = 'Vendido', status = null
+where archived = true and situation <> 'Vendido';
+
+update public.assets
+set status = 'Em uso'
+where archived = false and situation <> 'Vendido' and status is null;
+
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'assets_situation_check') then
+    alter table public.assets add constraint assets_situation_check
+      check (situation in ('Próprio', 'Alugado', 'Vendido'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'assets_status_check') then
+    alter table public.assets add constraint assets_status_check
+      check (status is null or status in ('Em uso', 'Locado', 'Empréstimo'));
+  end if;
+  if not exists (select 1 from pg_constraint where conname = 'assets_sold_status_check') then
+    alter table public.assets add constraint assets_sold_status_check
+      check (situation <> 'Vendido' or status is null);
+  end if;
+end $$;
 
 create table if not exists public.cash_movements (
   id text primary key,
