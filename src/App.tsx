@@ -1784,24 +1784,6 @@ function InvoiceList({
                 <button className="icon-btn" title="Visualizar" onClick={() => onOpen(invoice)}>
                   <Search size={16} />
                 </button>
-                {canEdit && (
-                  <>
-                    <button
-                      className="icon-btn"
-                      title="Editar lançamento"
-                      onClick={() => {
-                        if (window.confirm("Tem certeza que deseja editar este lançamento?")) {
-                          onOpen(invoice);
-                        }
-                      }}
-                    >
-                      <Pencil size={16} />
-                    </button>
-                    <button className="icon-btn danger" title="Excluir" onClick={() => window.confirm("Tem certeza que deseja excluir este lançamento?") && onDelete(invoice.id)}>
-                      <X size={16} />
-                    </button>
-                  </>
-                )}
               </div>
             )}
           />
@@ -1818,11 +1800,13 @@ function InvoiceForm({
   parties,
   products,
   editingInvoice,
+  viewOnly = false,
   canEdit = true,
   onSave,
   onDelete,
   onOperation,
   onAddParty,
+  onEdit,
   onDone,
 }: {
   type: InvoiceType;
@@ -1831,11 +1815,13 @@ function InvoiceForm({
   parties: Party[];
   products: ProductItem[];
   editingInvoice?: Invoice | null;
+  viewOnly?: boolean;
   canEdit?: boolean;
   onSave: (invoice: Invoice) => boolean | void;
   onDelete?: (id: string) => void;
   onOperation: (operation: LinkedOperation) => void;
   onAddParty: (kind: Party["kind"]) => void;
+  onEdit?: () => void;
   onDone: () => void;
 }) {
   const isReceived = type === "received";
@@ -2242,32 +2228,18 @@ function InvoiceForm({
   }
 
   return (
-    <form className="view-stack" onSubmit={submit} onInput={recalcItemValues}>
-      <fieldset disabled={!canEdit} className="form-fieldset">
+    <form className={`view-stack ${viewOnly ? "record-view-mode" : ""}`} onSubmit={submit} onInput={recalcItemValues}>
+      <fieldset disabled={!canEdit || viewOnly} className="form-fieldset">
       <section className="panel">
         <div className="panel-title between">
           <div className="panel-title">
             <Files size={20} />
-            <h2>{isEditing ? "Alterar lançamento" : isReceived ? "Nova Nota Recebida" : "Nova Nota Emitida"}</h2>
+            <h2>{viewOnly ? "Visualizar lançamento" : isEditing ? "Alterar lançamento" : isReceived ? "Nova Nota Recebida" : "Nova Nota Emitida"}</h2>
           </div>
-          {isEditing && canEdit && onDelete && (
-            <button
-              className="btn danger"
-              type="button"
-              onClick={() => {
-                if (!editingInvoice || !window.confirm("Tem certeza que deseja excluir este lançamento?")) return;
-                onDelete(editingInvoice.id);
-                onDone();
-              }}
-            >
-              <X size={17} />
-              Excluir lançamento
-            </button>
-          )}
         </div>
         {isEditing && !canEdit && (
           <div className="warning-list">
-            <span>Este lançamento pertence a uma competência fechada. Desbloqueie o período em Fechamentos para alterar.</span>
+            <span>Este lançamento está bloqueado por competência fechada ou por possuir pagamento. Reabra a competência ou remova a liquidação para alterá-lo.</span>
           </div>
         )}
         <div className="form-grid">
@@ -2695,18 +2667,28 @@ function InvoiceForm({
       )}
       </fieldset>
 
-      {canEdit && (
-        <div className="form-actions">
-          {isEditing && (
-            <ActionButton icon={X} variant="ghost" onClick={onDone}>
-              Cancelar
-            </ActionButton>
-          )}
-          <ActionButton icon={Save} type="submit">
-            {isEditing ? "Salvar alterações" : "Salvar nota"}
-          </ActionButton>
-        </div>
-      )}
+      <div className="form-actions">
+        {viewOnly ? (
+          <>
+            <ActionButton icon={X} variant="ghost" onClick={onDone}>Fechar</ActionButton>
+            {canEdit && onEdit && <ActionButton icon={Pencil} onClick={onEdit}>Editar</ActionButton>}
+          </>
+        ) : canEdit ? (
+          <>
+            {isEditing && onDelete && (
+              <ActionButton icon={X} variant="danger" onClick={() => {
+                if (!editingInvoice || !window.confirm("Tem certeza que deseja excluir este lançamento?")) return;
+                onDelete(editingInvoice.id);
+                onDone();
+              }}>Excluir lançamento</ActionButton>
+            )}
+            <ActionButton icon={X} variant="ghost" onClick={onDone}>Cancelar</ActionButton>
+            <ActionButton icon={Save} type="submit">{isEditing ? "Salvar alterações" : "Salvar nota"}</ActionButton>
+          </>
+        ) : (
+          <ActionButton icon={X} variant="ghost" onClick={onDone}>Fechar</ActionButton>
+        )}
+      </div>
     </form>
   );
 }
@@ -2723,13 +2705,20 @@ function LinkedOperationsView({
   canEdit: boolean;
 }) {
   const [query, setQuery] = useState("");
+  const [selectedOperation, setSelectedOperation] = useState<LinkedOperation | null>(null);
+  const [operationMode, setOperationMode] = useState<"view" | "edit">("view");
   const filtered = operations.filter((op) => searchMatches(operationSearchText(op), query));
-  const editOperation = (op: LinkedOperation) => {
-    if (!window.confirm("Tem certeza que deseja editar esta operação vinculada?")) return;
-    const nextStatus = window.prompt("Informe o status da operação:", op.status)?.trim();
-    if (!nextStatus) return;
-    const nextNotes = window.prompt("Informe as observações da operação:", op.notes)?.trim() ?? op.notes;
-    onSave({ ...op, status: nextStatus as LinkedOperation["status"], notes: nextNotes, updatedAt: new Date().toISOString() });
+  const saveOperation = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedOperation) return;
+    const form = new FormData(event.currentTarget);
+    onSave({
+      ...selectedOperation,
+      status: String(form.get("status") || selectedOperation.status) as LinkedOperation["status"],
+      notes: String(form.get("notes") || ""),
+      updatedAt: new Date().toISOString(),
+    });
+    setOperationMode("view");
   };
 
   return (
@@ -2743,6 +2732,47 @@ function LinkedOperationsView({
           Exportar
         </ActionButton>
       </div>
+      {selectedOperation && (
+        <section className="panel record-detail-panel">
+          <div className="panel-title between">
+            <h2>{operationMode === "view" ? "Visualizar operação vinculada" : "Alterar operação vinculada"}</h2>
+            <Badge value={selectedOperation.status} />
+          </div>
+          {operationMode === "view" ? (
+            <>
+              <div className="asset-detail-grid">
+                <div><span>Tipo</span><strong>{selectedOperation.operationType}</strong></div>
+                <div><span>Nota principal</span><strong>{selectedOperation.mainInvoiceNumber}</strong></div>
+                <div><span>Nota vinculada</span><strong>{selectedOperation.linkedInvoiceNumber}</strong></div>
+                <div><span>Data da operação</span><strong>{formatDate(selectedOperation.operationDate)}</strong></div>
+                <div><span>Fornecedor</span><strong>{selectedOperation.supplierName}</strong></div>
+                <div><span>Destinatário final</span><strong>{selectedOperation.finalRecipientName || "-"}</strong></div>
+                <div><span>Valor</span><strong>{formatCurrency(selectedOperation.amount)}</strong></div>
+                <div><span>Status</span><strong>{selectedOperation.status}</strong></div>
+                <div className="wide"><span>Observações</span><strong>{selectedOperation.notes || "Nenhuma observação informada."}</strong></div>
+              </div>
+              <div className="form-actions inline">
+                <ActionButton icon={X} variant="ghost" onClick={() => setSelectedOperation(null)}>Fechar</ActionButton>
+                {canEdit && <ActionButton icon={Pencil} onClick={() => setOperationMode("edit")}>Editar</ActionButton>}
+              </div>
+            </>
+          ) : (
+            <form className="form-grid" onSubmit={saveOperation}>
+              <Field label="Status" name="status" options={["Aberta", "Finalizada", "Parcialmente vinculada", "Pendente de XML", "Pendente de conferência", "Cancelada"]} defaultValue={selectedOperation.status} />
+              <label className="field wide"><span>Observações</span><textarea name="notes" defaultValue={selectedOperation.notes || ""} /></label>
+              <div className="form-actions inline">
+                <ActionButton icon={X} variant="danger" onClick={() => {
+                  if (!window.confirm("Tem certeza que deseja excluir esta operação vinculada?")) return;
+                  onDelete(selectedOperation.id);
+                  setSelectedOperation(null);
+                }}>Excluir</ActionButton>
+                <ActionButton icon={X} variant="ghost" onClick={() => setOperationMode("view")}>Cancelar</ActionButton>
+                <ActionButton icon={Save} type="submit">Salvar alterações</ActionButton>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
       <section className="panel">
         <div className="panel-title">
           <Link2 size={20} />
@@ -2751,44 +2781,17 @@ function LinkedOperationsView({
         <div className="table-wrap">
           <OperationRows
             operations={filtered}
-            actions={
-              canEdit
-                ? (op) => (
+            actions={(op) => (
               <div className="row-actions">
                 <button
                   className="icon-btn"
-                  title="Finalizar"
-                  onClick={() =>
-                    window.confirm("Tem certeza que deseja finalizar esta operação vinculada?") &&
-                    onSave({ ...op, status: "Finalizada", updatedAt: new Date().toISOString() })
-                  }
+                  title="Visualizar"
+                  onClick={() => { setSelectedOperation(op); setOperationMode("view"); }}
                 >
-                  <CheckCircle2 size={16} />
-                </button>
-                <button
-                  className="icon-btn"
-                  title="Marcar pendência"
-                  onClick={() =>
-                    window.confirm("Tem certeza que deseja marcar esta operação como pendente?") &&
-                    onSave({ ...op, status: "Pendente de conferência", updatedAt: new Date().toISOString() })
-                  }
-                >
-                  <AlertTriangle size={16} />
-                </button>
-                <button
-                  className="icon-btn"
-                  title="Editar"
-                  onClick={() => editOperation(op)}
-                >
-                  <Pencil size={16} />
-                </button>
-                <button className="icon-btn danger" title="Excluir" onClick={() => window.confirm("Tem certeza que deseja excluir esta operação vinculada?") && onDelete(op.id)}>
-                  <X size={16} />
+                  <Search size={16} />
                 </button>
               </div>
-                )
-                : undefined
-            }
+            )}
           />
         </div>
       </section>
@@ -2917,12 +2920,10 @@ function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (in
 function TaxView({
   invoices,
   closedPeriods,
-  onTogglePeriodLock,
 }: {
   totals: ReturnType<typeof useFiscalStore>["totals"];
   invoices: Invoice[];
   closedPeriods: Record<string, string>;
-  onTogglePeriodLock: (period: string, close: boolean) => void;
 }) {
   const [period, setPeriod] = useState("2026-06");
   const [openBreakdown, setOpenBreakdown] = useState<string | null>(null);
@@ -3018,9 +3019,6 @@ function TaxView({
           </div>
         </div>
         <div className="toolbar-actions">
-          <ActionButton icon={Lock} variant={closedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !closedAt)}>
-            {closedAt ? "Desbloquear competência" : "Fechar competência"}
-          </ActionButton>
           <ActionButton icon={RefreshCw} onClick={() => setPeriod("2026-06")}>
             Atualizar
           </ActionButton>
@@ -4021,7 +4019,6 @@ function ChecksView({
         <section className="panel">
           <div className="panel-title between">
             <h2>{editingCheck ? "Alterar cheque" : "Novo cheque recebido"}</h2>
-            <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingCheck(null); }}>Cancelar</ActionButton>
           </div>
           <form className="view-stack" onSubmit={saveCheck}>
             <div className="form-grid">
@@ -4042,6 +4039,7 @@ function ChecksView({
               </label>
             </div>
             <div className="form-actions">
+              <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingCheck(null); }}>Cancelar</ActionButton>
               <ActionButton icon={Save} type="submit">Salvar cheque</ActionButton>
             </div>
           </form>
@@ -4078,9 +4076,6 @@ function ChecksView({
                     <td>
                       <button className="icon-btn" type="button" title="Ver detalhes" onClick={() => setSelectedId(check.id)}>
                         <Search size={15} />
-                      </button>
-                      <button className="icon-btn" type="button" title="Editar" onClick={() => editCheck(check)}>
-                        <Pencil size={15} />
                       </button>
                     </td>
                   </tr>
@@ -4342,8 +4337,8 @@ function BillsView({
                   <td>{formatCurrency(invoiceFinancialAmount(invoice))}</td>
                   <td><Badge value={invoice.paid ? "Paga" : "Em aberto"} /></td>
                   <td>
-                    <button className="icon-btn" type="button" title="Editar fatura" onClick={() => onEdit(invoice)}>
-                      <Pencil size={15} />
+                    <button className="icon-btn" type="button" title="Visualizar fatura" onClick={() => onEdit(invoice)}>
+                      <Search size={15} />
                     </button>
                   </td>
                 </tr>
@@ -4363,17 +4358,23 @@ function BillsView({
 
 function BillFormView({
   editingBill,
+  viewOnly = false,
+  canEdit = true,
   parties,
   onSave,
   onDelete,
   onAddParty,
+  onEdit,
   onDone,
 }: {
   editingBill: Invoice | null;
+  viewOnly?: boolean;
+  canEdit?: boolean;
   parties: Party[];
   onSave: (invoice: Invoice) => boolean | void;
   onDelete: (id: string) => void;
   onAddParty: (kind: Party["kind"]) => void;
+  onEdit?: () => void;
   onDone: () => void;
 }) {
   const initialKind = editingBill ? billFinancialKind(editingBill) || "payable" : "payable";
@@ -4526,10 +4527,10 @@ function BillFormView({
     <div className="view-stack">
       <section className="panel">
         <div className="panel-title between">
-          <h2>{editingBill ? "Alterar fatura" : "Lançamento de faturas"}</h2>
-          <ActionButton icon={X} variant="ghost" onClick={onDone}>Cancelar</ActionButton>
+          <h2>{viewOnly ? "Visualizar fatura" : editingBill ? "Alterar fatura" : "Lançamento de faturas"}</h2>
         </div>
-        <form className="view-stack" onSubmit={submitBill} onInput={(event) => updateInstallmentSummary(event.currentTarget)}>
+        <form className={`view-stack ${viewOnly ? "record-view-mode" : ""}`} onSubmit={submitBill} onInput={(event) => updateInstallmentSummary(event.currentTarget)}>
+          <fieldset className="form-fieldset" disabled={viewOnly || !canEdit}>
           <div className="form-grid">
             <label className="field">
               <span>Tipo de lcto</span>
@@ -4612,21 +4613,26 @@ function BillFormView({
               <strong>{formatCurrency(installmentsTotal)}</strong>
             </div>
           </section>
+          </fieldset>
 
           <div className="form-actions">
-            <ActionButton icon={Save} type="submit">{editingBill ? "Salvar alteração" : "Salvar fatura"}</ActionButton>
-            {editingBill && (
-              <ActionButton
-                icon={X}
-                variant="danger"
-                onClick={() => {
-                  if (!window.confirm("Tem certeza que deseja excluir esta fatura?")) return;
-                  onDelete(editingBill.id);
-                  onDone();
-                }}
-              >
-                Excluir fatura
-              </ActionButton>
+            {viewOnly ? (
+              <>
+                <ActionButton icon={X} variant="ghost" onClick={onDone}>Fechar</ActionButton>
+                {canEdit && onEdit && <ActionButton icon={Pencil} onClick={onEdit}>Editar</ActionButton>}
+              </>
+            ) : (
+              <>
+                {editingBill && (
+                  <ActionButton icon={X} variant="danger" onClick={() => {
+                    if (!window.confirm("Tem certeza que deseja excluir esta fatura?")) return;
+                    onDelete(editingBill.id);
+                    onDone();
+                  }}>Excluir fatura</ActionButton>
+                )}
+                <ActionButton icon={X} variant="ghost" onClick={onDone}>Cancelar</ActionButton>
+                <ActionButton icon={Save} type="submit">{editingBill ? "Salvar alteração" : "Salvar fatura"}</ActionButton>
+              </>
             )}
           </div>
         </form>
@@ -4669,6 +4675,7 @@ function CashView({
   const [costCenterFilter, setCostCenterFilter] = useState("all");
   const [showForm, setShowForm] = useState(false);
   const [editingMovement, setEditingMovement] = useState<CashMovement | null>(null);
+  const [movementMode, setMovementMode] = useState<"new" | "view" | "edit">("new");
   const [movementType, setMovementType] = useState<CashMovementType>("entry");
 
   const invoiceEntries: CashExtractEntry[] = invoices.flatMap((invoice) => {
@@ -4759,13 +4766,14 @@ function CashView({
 
   const openNew = (type: CashMovementType = "entry") => {
     setEditingMovement(null);
+    setMovementMode("new");
     setMovementType(type);
     setShowForm(true);
   };
 
-  const openEdit = (movement: CashMovement) => {
-    if (!window.confirm("Tem certeza que deseja alterar este movimento?")) return;
+  const openMovement = (movement: CashMovement) => {
     setEditingMovement(movement);
+    setMovementMode("view");
     setMovementType(movement.movementType);
     setShowForm(true);
   };
@@ -4846,12 +4854,10 @@ function CashView({
       {showForm && (
         <section className="panel">
           <div className="panel-title between">
-            <h2>{editingMovement ? "Editar lançamento manual" : "Novo lançamento manual"}</h2>
-            <button className="icon-btn" type="button" title="Cancelar" onClick={() => { setShowForm(false); setEditingMovement(null); }}>
-              <X size={16} />
-            </button>
+            <h2>{movementMode === "view" ? "Visualizar lançamento manual" : editingMovement ? "Editar lançamento manual" : "Novo lançamento manual"}</h2>
           </div>
-          <form className="form-grid cash-form" onSubmit={submitMovement}>
+          <form className={`form-grid cash-form ${movementMode === "view" ? "record-view-mode" : ""}`} onSubmit={submitMovement}>
+            <fieldset className="form-fieldset form-grid" disabled={movementMode === "view"}>
             <label className="field">
               <span>Tipo</span>
               <select value={movementType} onChange={(event) => setMovementType(event.target.value as CashMovementType)}>
@@ -4874,12 +4880,20 @@ function CashView({
               <span>Histórico</span>
               <textarea name="history" defaultValue={editingMovement?.history || ""} />
             </label>
+            </fieldset>
             <div className="form-actions inline">
-              <ActionButton icon={Save} type="submit">{editingMovement ? "Salvar alteração" : "Salvar"}</ActionButton>
-              {editingMovement && (
-                <ActionButton icon={X} variant="danger" onClick={deleteMovement}>Excluir</ActionButton>
+              {movementMode === "view" ? (
+                <>
+                  <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingMovement(null); }}>Fechar</ActionButton>
+                  <ActionButton icon={Pencil} onClick={() => setMovementMode("edit")}>Editar</ActionButton>
+                </>
+              ) : (
+                <>
+                  {editingMovement && <ActionButton icon={X} variant="danger" onClick={deleteMovement}>Excluir</ActionButton>}
+                  <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingMovement(null); setMovementMode("new"); }}>Cancelar</ActionButton>
+                  <ActionButton icon={Save} type="submit">{editingMovement ? "Salvar alteração" : "Salvar"}</ActionButton>
+                </>
               )}
-              <ActionButton icon={X} variant="ghost" onClick={() => { setShowForm(false); setEditingMovement(null); }}>Cancelar</ActionButton>
             </div>
           </form>
         </section>
@@ -4921,8 +4935,8 @@ function CashView({
                       <td className={entry.amount < 0 ? "money-negative" : "money-positive"}>{formatCurrency(entry.amount)}</td>
                       <td>
                         {entry.source === "manual" && entry.movement ? (
-                          <button className="icon-btn" type="button" title="Editar" onClick={() => openEdit(entry.movement!)}>
-                            <Pencil size={15} />
+                          <button className="icon-btn" type="button" title="Visualizar" onClick={() => openMovement(entry.movement!)}>
+                            <Search size={15} />
                           </button>
                         ) : (
                           <span className="muted">Nota</span>
@@ -5112,8 +5126,8 @@ function AssetsView({
               <div className="wide"><span>Observações</span><strong>{viewingAsset.notes || "Nenhuma observação informada."}</strong></div>
             </div>
             <div className="form-actions inline">
-              <ActionButton icon={Pencil} onClick={() => openEdit(viewingAsset)}>Editar</ActionButton>
               <ActionButton icon={X} variant="ghost" onClick={closeAssetPanel}>Fechar</ActionButton>
+              <ActionButton icon={Pencil} onClick={() => openEdit(viewingAsset)}>Editar</ActionButton>
             </div>
           </article>
         )}
@@ -5168,11 +5182,10 @@ function AssetsView({
               <textarea name="notes" defaultValue={editingAsset?.notes || ""} placeholder="Informações complementares sobre o patrimônio" />
             </label>
             <div className="form-actions inline">
-              <ActionButton icon={Save} type="submit">
-                {editingAsset ? "Salvar alteração" : "Salvar patrimônio"}
-              </ActionButton>
               {editingAsset && (
                 <>
+                  {editingAsset.situation !== "Vendido" && <ActionButton icon={Archive} variant="ghost" onClick={markAsSold}>Marcar como vendido</ActionButton>}
+                  <ActionButton icon={X} variant="danger" onClick={deleteAsset}>Excluir item</ActionButton>
                   <ActionButton
                     icon={X}
                     variant="ghost"
@@ -5180,13 +5193,10 @@ function AssetsView({
                   >
                     Cancelar
                   </ActionButton>
-                  {editingAsset.situation !== "Vendido" && <ActionButton icon={Archive} variant="ghost" onClick={markAsSold}>Marcar como vendido</ActionButton>}
-                  <ActionButton icon={X} variant="danger" onClick={deleteAsset}>
-                    Excluir item
-                  </ActionButton>
                 </>
               )}
               {!editingAsset && <ActionButton icon={X} variant="ghost" onClick={closeAssetPanel}>Cancelar</ActionButton>}
+              <ActionButton icon={Save} type="submit">{editingAsset ? "Salvar alteração" : "Salvar patrimônio"}</ActionButton>
             </div>
           </form>
         )}
@@ -5275,6 +5285,8 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
   const pfRevenueImpact = includePfInDre ? issuedPfTotal : 0;
   const pfCostImpact = includePfInDre ? receivedPfTotal : 0;
   const profit = grossRevenue + pfRevenueImpact - taxes - costs - expenses - pfCostImpact;
+  const hasProfit = profit >= 0;
+  const resultLabel = hasProfit ? "Lucro" : "Prejuízo";
   const dreChart = [
     { name: "Impostos", value: chartValue(taxes), color: "#dc2626" },
     { name: "Custos", value: chartValue(costs), color: "#f97316" },
@@ -5283,7 +5295,7 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
       { name: "PF Faturado", value: chartValue(issuedPfTotal), color: "#0f766e" },
       { name: "PF Compras", value: chartValue(receivedPfTotal), color: "#92400e" },
     ] : []),
-    { name: "Lucro", value: chartValue(profit), color: "#16a34a" },
+    { name: resultLabel, value: hasProfit ? chartValue(profit) : Math.abs(profit), color: hasProfit ? "#16a34a" : "#dc2626" },
   ];
   const dreChartData = dreChart.some((item) => item.value > 0) ? dreChart : [{ name: "Sem dados", value: 1, color: "#94a3b8" }];
 
@@ -5345,7 +5357,10 @@ function DreView({ invoices }: { invoices: Invoice[] }) {
           <div><span>(-) Custos</span><strong>{formatCurrency(costs)}</strong></div>
           <div><span>(-) Despesas</span><strong>{formatCurrency(expenses)}</strong></div>
           {includePfInDre && <div><span>Total PF Compras</span><strong>{formatCurrency(receivedPfTotal)}</strong></div>}
-          <div className="dre-total"><span>= Lucro</span><strong>{formatCurrency(profit)}</strong></div>
+          <div className={`dre-total ${hasProfit ? "positive" : "negative"}`}>
+            <span>= {resultLabel}</span>
+            <strong>{formatCurrency(profit)}</strong>
+          </div>
         </div>
       </section>
       <section className="panel chart-panel">
@@ -5378,6 +5393,8 @@ function RegistrationsView({
   initialKind?: Party["kind"];
 }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [selectedPartyRecord, setSelectedPartyRecord] = useState<Party | null>(null);
+  const [partyMode, setPartyMode] = useState<"new" | "view" | "edit">("new");
   const [addKind, setAddKind] = useState<Party["kind"]>(initialKind || "customer");
   const [selectedKind, setSelectedKind] = useState<Party["kind"]>(initialKind || "customer");
   const [searchField, setSearchField] = useState<"cnpj" | "name" | "city" | "state" | "email" | "phone">("name");
@@ -5405,14 +5422,22 @@ function RegistrationsView({
     if (!initialKind) return;
     setAddKind(initialKind);
     setSelectedKind(initialKind);
+    setSelectedPartyRecord(null);
+    setPartyMode("new");
     setShowAdd(true);
   }, [initialKind]);
 
-  function addParty(event: FormEvent<HTMLFormElement>) {
+  function closePartyForm() {
+    setShowAdd(false);
+    setSelectedPartyRecord(null);
+    setPartyMode("new");
+  }
+
+  function saveParty(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const party: Party = {
-      id: newId("party"),
+      id: selectedPartyRecord?.id || newId("party"),
       kind: String(form.get("kind") || "customer") as Party["kind"],
       name: String(form.get("name") || ""),
       cnpj: String(form.get("cnpj") || ""),
@@ -5424,11 +5449,13 @@ function RegistrationsView({
       email: String(form.get("email") || ""),
       category: String(form.get("category") || ""),
       plate: String(form.get("plate") || ""),
-      active: true,
+      active: selectedPartyRecord?.active ?? true,
     };
 
-    setRegistryParties((current) => [party, ...current]);
-    setShowAdd(false);
+    setRegistryParties((current) => selectedPartyRecord
+      ? current.map((item) => item.id === selectedPartyRecord.id ? party : item)
+      : [party, ...current]);
+    closePartyForm();
     event.currentTarget.reset();
   }
 
@@ -5442,6 +5469,8 @@ function RegistrationsView({
         {canEdit && (
           <button className="add-card" type="button" onClick={() => {
             setAddKind(selectedKind);
+            setSelectedPartyRecord(null);
+            setPartyMode("new");
             setShowAdd(true);
           }}>
             <Plus size={22} />
@@ -5451,12 +5480,12 @@ function RegistrationsView({
       </section>
 
       {showAdd && (
-        <section className="panel">
+        <section className="panel" key={selectedPartyRecord?.id || "new-party"}>
           <div className="panel-title between">
-            <h2>Novo cadastro</h2>
-            <ActionButton icon={X} variant="ghost" onClick={() => setShowAdd(false)}>Cancelar</ActionButton>
+            <h2>{partyMode === "view" ? "Visualizar cadastro" : partyMode === "edit" ? "Alterar cadastro" : "Novo cadastro"}</h2>
           </div>
-          <form className="form-grid" onSubmit={addParty}>
+          <form className={`form-grid ${partyMode === "view" ? "record-view-mode" : ""}`} onSubmit={saveParty}>
+            <fieldset className="form-fieldset form-grid" disabled={partyMode === "view" || !canEdit}>
             <label className="field">
               <span>Tipo</span>
               <select name="kind" value={addKind} onChange={(event) => setAddKind(event.target.value as Party["kind"])}>
@@ -5465,20 +5494,36 @@ function RegistrationsView({
                 <option value="carrier">Transportadora</option>
               </select>
             </label>
-            <Field label="Nome/Razão social" name="name" required />
-            <CpfCnpjField label="CNPJ/CPF" name="cnpj" />
-            <Field label="Inscrição Estadual" name="ie" />
-            <Field label="Município" name="city" />
-            <Field label="UF" name="state" defaultValue="RS" />
-            <Field label="Endereço" name="address" />
-            <Field label="Telefone" name="phone" />
-            <Field label="E-mail" name="email" type="email" />
-            {addKind === "supplier" && <Field label="Categoria principal" name="category" />}
-            {addKind === "carrier" && <Field label="Placa padrão" name="plate" />}
+            <Field label="Nome/Razão social" name="name" defaultValue={selectedPartyRecord?.name || ""} required />
+            <CpfCnpjField label="CNPJ/CPF" name="cnpj" defaultValue={selectedPartyRecord?.cnpj || ""} />
+            <Field label="Inscrição Estadual" name="ie" defaultValue={selectedPartyRecord?.ie || ""} />
+            <Field label="Município" name="city" defaultValue={selectedPartyRecord?.city || ""} />
+            <Field label="UF" name="state" defaultValue={selectedPartyRecord?.state || "RS"} />
+            <Field label="Endereço" name="address" defaultValue={selectedPartyRecord?.address || ""} />
+            <Field label="Telefone" name="phone" defaultValue={selectedPartyRecord?.phone || ""} />
+            <Field label="E-mail" name="email" type="email" defaultValue={selectedPartyRecord?.email || ""} />
+            {addKind === "supplier" && <Field label="Categoria principal" name="category" defaultValue={selectedPartyRecord?.category || ""} />}
+            {addKind === "carrier" && <Field label="Placa padrão" name="plate" defaultValue={selectedPartyRecord?.plate || ""} />}
+            </fieldset>
             <div className="form-actions inline">
-              <ActionButton icon={Save} type="submit">
-                Salvar cadastro
-              </ActionButton>
+              {partyMode === "view" ? (
+                <>
+                  <ActionButton icon={X} variant="ghost" onClick={closePartyForm}>Fechar</ActionButton>
+                  {canEdit && <ActionButton icon={Pencil} onClick={() => setPartyMode("edit")}>Editar</ActionButton>}
+                </>
+              ) : (
+                <>
+                  {partyMode === "edit" && selectedPartyRecord && (
+                    <ActionButton icon={X} variant="danger" onClick={() => {
+                      if (!window.confirm("Tem certeza que deseja excluir este cadastro?")) return;
+                      setRegistryParties((current) => current.filter((item) => item.id !== selectedPartyRecord.id));
+                      closePartyForm();
+                    }}>Excluir cadastro</ActionButton>
+                  )}
+                  <ActionButton icon={X} variant="ghost" onClick={closePartyForm}>Cancelar</ActionButton>
+                  <ActionButton icon={Save} type="submit">{partyMode === "edit" ? "Salvar alterações" : "Salvar cadastro"}</ActionButton>
+                </>
+              )}
             </div>
           </form>
         </section>
@@ -5534,7 +5579,7 @@ function RegistrationsView({
                   <th>Telefone</th>
                   <th>E-mail</th>
                   <th>Ativo</th>
-                  {canEdit && <th>Ações</th>}
+                  <th>Ações</th>
                 </tr>
               </thead>
               <tbody>
@@ -5549,39 +5594,27 @@ function RegistrationsView({
                       <td>{party.phone}</td>
                       <td>{party.email}</td>
                       <td>{party.active ? "Sim" : "Não"}</td>
-                      {canEdit && (
                       <td>
                         <div className="row-actions">
                           <button
                             className="icon-btn"
-                            title="Editar cadastro"
+                            title="Visualizar cadastro"
                             onClick={() => {
-                              if (!window.confirm("Tem certeza que deseja editar este cadastro?")) return;
-                              const name = window.prompt("Informe o novo nome/razão social:", party.name)?.trim();
-                              if (!name) return;
-                              setRegistryParties((current) => current.map((item) => (item.id === party.id ? { ...item, name } : item)));
+                              setSelectedPartyRecord(party);
+                              setAddKind(party.kind);
+                              setPartyMode("view");
+                              setShowAdd(true);
                             }}
                           >
-                            <Pencil size={16} />
-                          </button>
-                          <button
-                            className="icon-btn danger"
-                            title="Excluir cadastro"
-                            onClick={() =>
-                              window.confirm("Tem certeza que deseja excluir este cadastro?") &&
-                              setRegistryParties((current) => current.filter((item) => item.id !== party.id))
-                            }
-                          >
-                            <X size={16} />
+                            <Search size={16} />
                           </button>
                         </div>
                       </td>
-                      )}
                     </tr>
                   ))}
                 {!filteredParties.length && (
                   <tr>
-                    <td colSpan={canEdit ? 9 : 8}>Nenhum cadastro encontrado.</td>
+                    <td colSpan={9}>Nenhum cadastro encontrado.</td>
                   </tr>
                 )}
               </tbody>
@@ -5604,6 +5637,7 @@ function ProductsView({
   canEdit: boolean;
 }) {
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
+  const [productMode, setProductMode] = useState<"new" | "view" | "edit">("new");
   const [showForm, setShowForm] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const autoRegisteredProducts = useRef(new Set<string>());
@@ -5702,34 +5736,41 @@ function ProductsView({
         {canEdit && (
           <ActionButton icon={Plus} onClick={() => {
             setEditingProduct(null);
+            setProductMode("new");
             setShowForm(true);
           }}>Adicionar</ActionButton>
         )}
       </section>
 
-      {canEdit && showForm && (
+      {showForm && (
         <section className="panel" key={editingProduct?.id || "new-product"}>
           <div className="panel-title between">
-            <h2>{editingProduct ? "Alterar produto" : "Novo produto"}</h2>
-            <ActionButton icon={X} variant="ghost" onClick={() => {
-              setEditingProduct(null);
-              setShowForm(false);
-            }}>Cancelar</ActionButton>
+            <h2>{productMode === "view" ? "Visualizar produto" : editingProduct ? "Alterar produto" : "Novo produto"}</h2>
           </div>
-          <form className="form-grid" onSubmit={saveProduct}>
+          <form className={`form-grid ${productMode === "view" ? "record-view-mode" : ""}`} onSubmit={saveProduct}>
+            <fieldset className="form-fieldset form-grid" disabled={productMode === "view" || !canEdit}>
             <Field label="Código do produto" name="code" defaultValue={editingProduct?.code || ""} />
             <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
             <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
             <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
             <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
+            </fieldset>
             <div className="form-actions inline">
-              <ActionButton icon={Save} type="submit">
-                Salvar produto
-              </ActionButton>
-              {editingProduct && (
-                <ActionButton icon={Archive} variant={editingProduct.active ? "danger" : "ghost"} onClick={toggleArchive}>
-                  {editingProduct.active ? "Arquivar produto" : "Reativar produto"}
-                </ActionButton>
+              {productMode === "view" ? (
+                <>
+                  <ActionButton icon={X} variant="ghost" onClick={() => { setEditingProduct(null); setShowForm(false); }}>Fechar</ActionButton>
+                  {canEdit && <ActionButton icon={Pencil} onClick={() => setProductMode("edit")}>Editar</ActionButton>}
+                </>
+              ) : (
+                <>
+                  {editingProduct && (
+                    <ActionButton icon={Archive} variant={editingProduct.active ? "danger" : "ghost"} onClick={toggleArchive}>
+                      {editingProduct.active ? "Arquivar produto" : "Reativar produto"}
+                    </ActionButton>
+                  )}
+                  <ActionButton icon={X} variant="ghost" onClick={() => { setEditingProduct(null); setShowForm(false); setProductMode("new"); }}>Cancelar</ActionButton>
+                  <ActionButton icon={Save} type="submit">{editingProduct ? "Salvar alterações" : "Salvar produto"}</ActionButton>
+                </>
               )}
             </div>
           </form>
@@ -5762,7 +5803,7 @@ function ProductsView({
                 <th>Centro de custo padrão</th>
                 <th>Unidade</th>
                 <th>Ativo</th>
-                {canEdit && <th>Ações</th>}
+                <th>Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -5774,29 +5815,27 @@ function ProductsView({
                   <td>{product.defaultCostCenter}</td>
                   <td>{product.defaultUnit}</td>
                   <td>{product.active ? "Sim" : "Não"}</td>
-                  {canEdit && (
-                    <td>
+                  <td>
                       <div className="row-actions">
                         <button
                           className="icon-btn"
-                          title="Editar produto"
+                          title="Visualizar produto"
                           type="button"
                           onClick={() => {
-                            if (!window.confirm("Tem certeza que deseja editar este produto?")) return;
                             setEditingProduct(product);
+                            setProductMode("view");
                             setShowForm(true);
                           }}
                         >
-                          <Pencil size={16} />
+                          <Search size={16} />
                         </button>
                       </div>
                     </td>
-                  )}
                 </tr>
               ))}
               {!filteredProducts.length && (
                 <tr>
-                  <td colSpan={canEdit ? 7 : 6}>Nenhum produto encontrado.</td>
+                  <td colSpan={7}>Nenhum produto encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -6016,9 +6055,6 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                 </div>
               )}
               <div className="form-actions inline">
-                <ActionButton icon={Save} type="submit">
-                  {editingConfigItem ? "Salvar alteração" : "Salvar alterações"}
-                </ActionButton>
                 {editingConfigItem && (
                   <button
                     className="btn ghost"
@@ -6032,6 +6068,9 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                     Cancelar
                   </button>
                 )}
+                <ActionButton icon={Save} type="submit">
+                  {editingConfigItem ? "Salvar alteração" : "Salvar alterações"}
+                </ActionButton>
               </div>
             </div>
           </form>
@@ -6126,6 +6165,7 @@ export default function App() {
   const [registryParties, setRegistryParties] = useState<Party[]>([]);
   const [configVersion, setConfigVersion] = useState(0);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
+  const [recordMode, setRecordMode] = useState<"new" | "view" | "edit">("new");
   const [registrationKind, setRegistrationKind] = useState<Party["kind"] | undefined>();
   const store = useFiscalStore();
 
@@ -6248,15 +6288,17 @@ export default function App() {
   };
   const openInvoiceForm = (invoice: Invoice) => {
     setEditingInvoice(invoice);
+    setRecordMode("view");
     setView(invoice.invoiceType === "issued" ? "new-issued" : "new-received");
   };
   const openNewInvoice = (nextView: View) => {
     setEditingInvoice(null);
+    setRecordMode("new");
     setView(nextView);
   };
   const openBillForm = (invoice?: Invoice) => {
-    if (invoice && !window.confirm("Tem certeza que deseja alterar esta fatura?")) return;
     setEditingInvoice(invoice || null);
+    setRecordMode(invoice ? "view" : "new");
     setView("new-bill");
   };
   const openRegistration = (kind: Party["kind"]) => {
@@ -6429,7 +6471,10 @@ export default function App() {
                       key={childId}
                       className={view === childId ? "active" : ""}
                       onClick={() => {
-                        if (childId === "new-issued" || childId === "new-received" || childId === "new-bill") setEditingInvoice(null);
+                        if (childId === "new-issued" || childId === "new-received" || childId === "new-bill") {
+                          setEditingInvoice(null);
+                          setRecordMode("new");
+                        }
                         setView(childId);
                         setSidebarOpen(false);
                       }}
@@ -6554,13 +6599,16 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
+              viewOnly={Boolean(editingInvoice) && recordMode === "view"}
               canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
+              onEdit={() => setRecordMode("edit")}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onOperation={guardedSaveLinkedOperation}
               onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
+                setRecordMode("new");
                 setView("issued");
               }}
             />
@@ -6573,13 +6621,16 @@ export default function App() {
               parties={registryParties}
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
+              viewOnly={Boolean(editingInvoice) && recordMode === "view"}
               canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
+              onEdit={() => setRecordMode("edit")}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onOperation={guardedSaveLinkedOperation}
               onAddParty={openRegistration}
               onDone={() => {
                 setEditingInvoice(null);
+                setRecordMode("new");
                 setView("received");
               }}
             />
@@ -6587,7 +6638,7 @@ export default function App() {
           {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={guardedSaveLinkedOperation} onDelete={guardedDeleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "conference" && <ConferenceView invoices={store.invoices} onOpen={openInvoiceForm} />}
-          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
+          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} />}
           {view === "closures" && <ClosuresView invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
           {view === "financial-receivable" && (
             <FinancialView
@@ -6639,15 +6690,19 @@ export default function App() {
               onEdit={openBillForm}
             />
           )}
-          {view === "new-bill" && canEdit && (
+          {view === "new-bill" && (canEdit || editingInvoice) && (
             <BillFormView
               editingBill={editingInvoice && isBillInvoice(editingInvoice) ? editingInvoice : null}
+              viewOnly={Boolean(editingInvoice) && recordMode === "view"}
+              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               parties={registryParties}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
               onAddParty={openRegistration}
+              onEdit={() => setRecordMode("edit")}
               onDone={() => {
                 setEditingInvoice(null);
+                setRecordMode("new");
                 setView("bills");
               }}
             />

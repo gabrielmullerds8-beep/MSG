@@ -106,6 +106,22 @@ button {
   display: contents;
 }
 
+.record-view-mode input:disabled,
+.record-view-mode select:disabled,
+.record-view-mode textarea:disabled {
+  background: #f7f8f5;
+  color: var(--text);
+  cursor: default;
+  opacity: 1;
+  -webkit-text-fill-color: var(--text);
+}
+
+.record-view-mode input[type="checkbox"]:disabled,
+.record-view-mode input[type="radio"]:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
 .brand-mark {
   width: 64px;
   height: 64px;
@@ -759,9 +775,16 @@ button {
 }
 
 .dre-total {
-  color: var(--green);
   font-size: 18px;
   border-bottom: 0 !important;
+}
+
+.dre-total.positive {
+  color: var(--green);
+}
+
+.dre-total.negative {
+  color: var(--red);
 }
 
 .chart-grid {
