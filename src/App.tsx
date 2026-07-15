@@ -129,6 +129,39 @@ const noteViewIds = new Set<View>(noteViews.map((item) => item.id));
 const fiscalViewIds = new Set<View>(fiscalViews.map((item) => item.id));
 const viewTitles = [...views, ...financialViews, ...noteViews, ...fiscalViews];
 
+const UI_SESSION_PREFIX = "msg-ui:";
+
+function useSessionState<T>(key: string, initialValue: T | (() => T)) {
+  const storageKey = `${UI_SESSION_PREFIX}${key}`;
+  const [value, setValue] = useState<T>(() => {
+    const fallback = typeof initialValue === "function" ? (initialValue as () => T)() : initialValue;
+    if (typeof window === "undefined") return fallback;
+    try {
+      const stored = window.sessionStorage.getItem(storageKey);
+      return stored === null ? fallback : JSON.parse(stored) as T;
+    } catch {
+      return fallback;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.sessionStorage.setItem(storageKey, JSON.stringify(value));
+    } catch {
+      // A interface continua funcional mesmo quando o navegador bloqueia o armazenamento da sessão.
+    }
+  }, [storageKey, value]);
+
+  return [value, setValue] as const;
+}
+
+function clearUiSessionState() {
+  if (typeof window === "undefined") return;
+  Object.keys(window.sessionStorage)
+    .filter((key) => key.startsWith(UI_SESSION_PREFIX))
+    .forEach((key) => window.sessionStorage.removeItem(key));
+}
+
 const colors = ["#2563eb", "#16a34a", "#f97316", "#dc2626", "#7c3aed", "#0f766e"];
 const unitOptions = ["UN", "KG", "M3", "TN", "TON", "MT", "PC", "SV", "BR"];
 const holderOptions = ["Itaú", "Sicredi", "Itaú Mailson"];
@@ -1696,11 +1729,11 @@ function InvoiceList({
   onOpen: (invoice: Invoice) => void;
   canEdit: boolean;
 }) {
-  const [query, setQuery] = useState("");
-  const [cfop, setCfop] = useState("");
-  const [dateStart, setDateStart] = useState("");
-  const [dateEnd, setDateEnd] = useState("");
-  const [linkedOnly, setLinkedOnly] = useState(false);
+  const [query, setQuery] = useSessionState(`invoice-list:${type}:query`, "");
+  const [cfop, setCfop] = useSessionState(`invoice-list:${type}:cfop`, "");
+  const [dateStart, setDateStart] = useSessionState(`invoice-list:${type}:date-start`, "");
+  const [dateEnd, setDateEnd] = useSessionState(`invoice-list:${type}:date-end`, "");
+  const [linkedOnly, setLinkedOnly] = useSessionState(`invoice-list:${type}:linked-only`, false);
   const filtered = invoices
     .filter((invoice) => invoice.invoiceType === type)
     .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
@@ -2704,7 +2737,7 @@ function LinkedOperationsView({
   onDelete: (id: string) => void;
   canEdit: boolean;
 }) {
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useSessionState("linked-operations:query", "");
   const [selectedOperation, setSelectedOperation] = useState<LinkedOperation | null>(null);
   const [operationMode, setOperationMode] = useState<"view" | "edit">("view");
   const filtered = operations.filter((op) => searchMatches(operationSearchText(op), query));
@@ -2800,9 +2833,9 @@ function LinkedOperationsView({
 }
 
 function SearchView({ invoices }: { invoices: Invoice[]; operations: LinkedOperation[] }) {
-  const [query, setQuery] = useState("");
-  const [dateStart, setDateStart] = useState("");
-  const [dateEnd, setDateEnd] = useState("");
+  const [query, setQuery] = useSessionState("fiscal-search:query", "");
+  const [dateStart, setDateStart] = useSessionState("fiscal-search:date-start", "");
+  const [dateEnd, setDateEnd] = useSessionState("fiscal-search:date-end", "");
   const rows = invoices
     .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
     .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd));
@@ -2925,8 +2958,8 @@ function TaxView({
   invoices: Invoice[];
   closedPeriods: Record<string, string>;
 }) {
-  const [period, setPeriod] = useState("2026-06");
-  const [openBreakdown, setOpenBreakdown] = useState<string | null>(null);
+  const [period, setPeriod] = useSessionState("tax:period", "2026-06");
+  const [openBreakdown, setOpenBreakdown] = useSessionState<string | null>("tax:open-breakdown", null);
   const closedAt = closedPeriods[period];
   const periodInvoices = invoices.filter((invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
@@ -3126,7 +3159,7 @@ function ClosuresView({
 }) {
   const today = todayIso();
   const currentPeriod = today.slice(0, 7);
-  const [period, setPeriod] = useState(currentPeriod);
+  const [period, setPeriod] = useSessionState("closures:period", currentPeriod);
   const periods = Array.from(new Set([
     currentPeriod,
     ...invoices.map(invoicePeriodKey).filter(Boolean),
@@ -3234,11 +3267,12 @@ function FinancialView({
   fixedType?: "receivable" | "payable";
 }) {
   const today = todayIso();
-  const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
-  const [endDate, setEndDate] = useState(today);
-  const [listType, setListType] = useState<"all" | "receivable" | "payable">(fixedType || "all");
-  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "paid">("open");
-  const [holderFilter, setHolderFilter] = useState("all");
+  const sessionKey = `financial:${mode}:${fixedType || "all"}`;
+  const [startDate, setStartDate] = useSessionState(`${sessionKey}:date-start`, today.slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useSessionState(`${sessionKey}:date-end`, today);
+  const [listType, setListType] = useSessionState<"all" | "receivable" | "payable">(`${sessionKey}:list-type`, fixedType || "all");
+  const [statusFilter, setStatusFilter] = useSessionState<"all" | "open" | "paid">(`${sessionKey}:status`, "open");
+  const [holderFilter, setHolderFilter] = useSessionState(`${sessionKey}:holder`, "all");
   const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
@@ -3722,8 +3756,8 @@ function ChecksView({
 }) {
   type CheckFilter = "all" | "received" | "holding" | "passed" | "deposited" | "compensated" | "canceled";
   type CheckAction = "pass" | "deposit" | "compensate" | "return" | "recover" | "cancel";
-  const [filter, setFilter] = useState<CheckFilter>("holding");
-  const [selectedId, setSelectedId] = useState<string>("");
+  const [filter, setFilter] = useSessionState<CheckFilter>("checks:filter", "holding");
+  const [selectedId, setSelectedId] = useSessionState<string>("checks:selected-id", "");
   const [editingCheck, setEditingCheck] = useState<CheckItem | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [activeAction, setActiveAction] = useState<CheckAction | null>(null);
@@ -4246,9 +4280,9 @@ function BillsView({
   onNew: () => void;
   onEdit: (invoice: Invoice) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [query, setQuery] = useSessionState("bills:query", "");
+  const [startDate, setStartDate] = useSessionState("bills:date-start", "");
+  const [endDate, setEndDate] = useSessionState("bills:date-end", "");
   const billInvoices = useMemo(
     () => invoices
       .filter(isBillInvoice)
@@ -4669,10 +4703,11 @@ function CashView({
   mode?: "normal" | "pf";
 }) {
   const today = todayIso();
-  const [startDate, setStartDate] = useState(today.slice(0, 7) + "-01");
-  const [endDate, setEndDate] = useState(today);
-  const [holderFilter, setHolderFilter] = useState("all");
-  const [costCenterFilter, setCostCenterFilter] = useState("all");
+  const sessionKey = `cash:${mode}`;
+  const [startDate, setStartDate] = useSessionState(`${sessionKey}:date-start`, today.slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useSessionState(`${sessionKey}:date-end`, today);
+  const [holderFilter, setHolderFilter] = useSessionState(`${sessionKey}:holder`, "all");
+  const [costCenterFilter, setCostCenterFilter] = useSessionState(`${sessionKey}:cost-center`, "all");
   const [showForm, setShowForm] = useState(false);
   const [editingMovement, setEditingMovement] = useState<CashMovement | null>(null);
   const [movementMode, setMovementMode] = useState<"new" | "view" | "edit">("new");
@@ -5008,7 +5043,7 @@ function AssetsView({
   const [showForm, setShowForm] = useState(false);
   const [editingAsset, setEditingAsset] = useState<AssetItem | null>(null);
   const [viewingAsset, setViewingAsset] = useState<AssetItem | null>(null);
-  const [showSoldAssets, setShowSoldAssets] = useState(false);
+  const [showSoldAssets, setShowSoldAssets] = useSessionState("assets:show-sold", false);
   const [selectedAssetType, setSelectedAssetType] = useState(editingAsset?.itemType || "");
   const [selectedSituation, setSelectedSituation] = useState<AssetItem["situation"]>("Próprio");
   const visibleAssets = assets.filter((asset) => !asset.archived && asset.situation !== "Vendido");
@@ -5256,15 +5291,15 @@ function AssetsView({
 }
 
 function DreView({ invoices }: { invoices: Invoice[] }) {
-  const [startDate, setStartDate] = useState(todayIso().slice(0, 7) + "-01");
-  const [endDate, setEndDate] = useState(todayIso());
-  const [showAdjust, setShowAdjust] = useState(false);
-  const [showRevenueAdjust, setShowRevenueAdjust] = useState(false);
-  const [simulatedCosts, setSimulatedCosts] = useState("");
-  const [simulatedExpenses, setSimulatedExpenses] = useState("");
-  const [simulatedGrossRevenue, setSimulatedGrossRevenue] = useState("");
-  const [simulatedTaxes, setSimulatedTaxes] = useState("");
-  const [includePfInDre, setIncludePfInDre] = useState(false);
+  const [startDate, setStartDate] = useSessionState("dre:date-start", todayIso().slice(0, 7) + "-01");
+  const [endDate, setEndDate] = useSessionState("dre:date-end", todayIso());
+  const [showAdjust, setShowAdjust] = useSessionState("dre:show-cost-adjustment", false);
+  const [showRevenueAdjust, setShowRevenueAdjust] = useSessionState("dre:show-revenue-adjustment", false);
+  const [simulatedCosts, setSimulatedCosts] = useSessionState("dre:simulated-costs", "");
+  const [simulatedExpenses, setSimulatedExpenses] = useSessionState("dre:simulated-expenses", "");
+  const [simulatedGrossRevenue, setSimulatedGrossRevenue] = useSessionState("dre:simulated-revenue", "");
+  const [simulatedTaxes, setSimulatedTaxes] = useSessionState("dre:simulated-taxes", "");
+  const [includePfInDre, setIncludePfInDre] = useSessionState("dre:include-pf", false);
   const inPeriod = (invoice: Invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return (!startDate || date >= startDate) && (!endDate || date <= endDate);
@@ -5396,9 +5431,9 @@ function RegistrationsView({
   const [selectedPartyRecord, setSelectedPartyRecord] = useState<Party | null>(null);
   const [partyMode, setPartyMode] = useState<"new" | "view" | "edit">("new");
   const [addKind, setAddKind] = useState<Party["kind"]>(initialKind || "customer");
-  const [selectedKind, setSelectedKind] = useState<Party["kind"]>(initialKind || "customer");
-  const [searchField, setSearchField] = useState<"cnpj" | "name" | "city" | "state" | "email" | "phone">("name");
-  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedKind, setSelectedKind] = useSessionState<Party["kind"]>("registrations:kind", initialKind || "customer");
+  const [searchField, setSearchField] = useSessionState<"cnpj" | "name" | "city" | "state" | "email" | "phone">("registrations:search-field", "name");
+  const [searchQuery, setSearchQuery] = useSessionState("registrations:query", "");
   const partyKinds: Array<{ id: Party["kind"]; label: string }> = [
     { id: "customer", label: "Clientes" },
     { id: "supplier", label: "Fornecedores" },
@@ -5639,7 +5674,7 @@ function ProductsView({
   const [editingProduct, setEditingProduct] = useState<ProductItem | null>(null);
   const [productMode, setProductMode] = useState<"new" | "view" | "edit">("new");
   const [showForm, setShowForm] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
+  const [searchQuery, setSearchQuery] = useSessionState("products:query", "");
   const autoRegisteredProducts = useRef(new Set<string>());
   const filteredProducts = useMemo(() => products.filter((product) => searchMatches([
     product.code,
@@ -5848,7 +5883,7 @@ function ProductsView({
 
 function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolean }) {
   const [showEditor, setShowEditor] = useState(false);
-  const [selectedConfigList, setSelectedConfigList] = useState<FiscalConfigListName>("cfops");
+  const [selectedConfigList, setSelectedConfigList] = useSessionState<FiscalConfigListName>("settings:selected-list", "cfops");
   const [configItemValue, setConfigItemValue] = useState("");
   const [editingConfigItem, setEditingConfigItem] = useState<{
     listName: FiscalConfigListName;
@@ -6160,7 +6195,7 @@ export default function App() {
   const [logged, setLogged] = useState(false);
   const [userEmail, setUserEmail] = useState("");
   const [authMessage, setAuthMessage] = useState(() => getAuthReturnMessage());
-  const [view, setView] = useState<View>("dashboard");
+  const [view, setViewState] = useState<View>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [registryParties, setRegistryParties] = useState<Party[]>([]);
   const [configVersion, setConfigVersion] = useState(0);
@@ -6175,6 +6210,54 @@ export default function App() {
   const [financeMenuOpen, setFinanceMenuOpen] = useState(false);
   const [notesMenuOpen, setNotesMenuOpen] = useState(false);
   const [fiscalMenuOpen, setFiscalMenuOpen] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const scrollMemorySelector = ".table-wrap, .financial-table-scroll, .checks-list, .check-table-wrap";
+
+  function saveCurrentViewScroll() {
+    try {
+      window.sessionStorage.setItem(`${UI_SESSION_PREFIX}scroll:${view}`, String(window.scrollY));
+      contentRef.current?.querySelectorAll<HTMLElement>(scrollMemorySelector).forEach((element, index) => {
+        window.sessionStorage.setItem(`${UI_SESSION_PREFIX}scroll:${view}:inner:${index}:top`, String(element.scrollTop));
+        window.sessionStorage.setItem(`${UI_SESSION_PREFIX}scroll:${view}:inner:${index}:left`, String(element.scrollLeft));
+      });
+    } catch {
+      // A navegação continua normalmente quando o armazenamento da sessão não está disponível.
+    }
+  }
+
+  function setView(nextView: View) {
+    if (nextView === view) return;
+    saveCurrentViewScroll();
+    setViewState(nextView);
+  }
+
+  useEffect(() => {
+    let savedPosition = 0;
+    try {
+      savedPosition = Number(window.sessionStorage.getItem(`${UI_SESSION_PREFIX}scroll:${view}`) || 0);
+    } catch {
+      savedPosition = 0;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: savedPosition, behavior: "auto" });
+      try {
+        contentRef.current?.querySelectorAll<HTMLElement>(scrollMemorySelector).forEach((element, index) => {
+          const top = Number(window.sessionStorage.getItem(`${UI_SESSION_PREFIX}scroll:${view}:inner:${index}:top`) || 0);
+          const left = Number(window.sessionStorage.getItem(`${UI_SESSION_PREFIX}scroll:${view}:inner:${index}:left`) || 0);
+          element.scrollTo({ top, left, behavior: "auto" });
+        });
+      } catch {
+        // Sem restauração de rolagem quando o navegador bloqueia o armazenamento da sessão.
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [view]);
+
+  useEffect(() => {
+    const saveBeforeLeaving = () => saveCurrentViewScroll();
+    window.addEventListener("beforeunload", saveBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", saveBeforeLeaving);
+  }, [view]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -6210,8 +6293,10 @@ export default function App() {
         clearAuthParams();
       }
       if (event === "SIGNED_OUT") {
+        clearUiSessionState();
         setLogged(false);
         setUserEmail("");
+        setViewState("dashboard");
       }
     });
 
@@ -6539,9 +6624,10 @@ export default function App() {
           </button>
           <button onClick={async () => {
             if (supabase) await supabase.auth.signOut();
+            clearUiSessionState();
             setLogged(false);
             setUserEmail("");
-            setView("dashboard");
+            setViewState("dashboard");
           }}>
             <LogOut size={18} />
             Sair
@@ -6569,7 +6655,7 @@ export default function App() {
           </div>
         </header>
 
-        <div className="content">
+        <div className="content" ref={contentRef}>
           {view === "dashboard" && <Dashboard invoices={store.invoices} operations={store.linkedOperations} totals={store.totals} onView={setView} />}
           {view === "issued" && (
             <InvoiceList
