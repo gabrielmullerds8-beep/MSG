@@ -20,13 +20,15 @@ export function useFiscalStore() {
 
     const client = supabase;
     let mounted = true;
+    let loadSequence = 0;
 
     const loadRemote = async () => {
+      const sequence = ++loadSequence;
       setSyncing(true);
       const { data: sessionData } = await client.auth.getSession();
 
       if (!sessionData.session) {
-        if (mounted) {
+        if (mounted && sequence === loadSequence) {
           setInvoices([]);
           setLinkedOperations([]);
           setAssets([]);
@@ -48,9 +50,9 @@ export function useFiscalStore() {
         client.from("checks").select("*").order("received_date", { ascending: false }),
       ]);
 
-      if (!mounted) return;
+      if (!mounted || sequence !== loadSequence) return;
 
-      if (invoiceResult.error || operationResult.error || assetResult.error || cashMovementResult.error || productResult.error) {
+      if (invoiceResult.error || operationResult.error || assetResult.error || cashMovementResult.error || productResult.error || checkResult.error) {
         setSyncMode("offline");
         setSyncing(false);
         return;
@@ -118,6 +120,7 @@ export function useFiscalStore() {
 
     return () => {
       mounted = false;
+      loadSequence += 1;
       subscription.unsubscribe();
       client.removeChannel(channel);
     };
@@ -127,7 +130,7 @@ export function useFiscalStore() {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. O lançamento não foi salvo.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -136,7 +139,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível salvar no Supabase. Verifique a conexão e tente novamente.");
-      return;
+      return false;
     }
 
     setInvoices((current) => {
@@ -148,13 +151,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteInvoice = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. O lançamento não foi excluído.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -163,20 +167,21 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível excluir no Supabase. Verifique a conexão e tente novamente.");
-      return;
+      return false;
     }
 
     setInvoices((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const saveLinkedOperation = useCallback(async (operation: LinkedOperation) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. A operação não foi salva.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -185,7 +190,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível salvar no Supabase. Verifique a conexão e tente novamente.");
-      return;
+      return false;
     }
 
     setLinkedOperations((current) => {
@@ -197,13 +202,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteLinkedOperation = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. A operação não foi excluída.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -212,20 +218,21 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível excluir no Supabase. Verifique a conexão e tente novamente.");
-      return;
+      return false;
     }
 
     setLinkedOperations((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const saveAsset = useCallback(async (asset: AssetItem) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. O patrimônio não foi salvo.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -234,7 +241,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível salvar o patrimônio no Supabase.");
-      return;
+      return false;
     }
 
     setAssets((current) => {
@@ -244,13 +251,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteAsset = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase não configurado. O patrimônio não foi excluído.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -259,20 +267,21 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Não foi possível excluir o patrimônio no Supabase.");
-      return;
+      return false;
     }
 
     setAssets((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const saveCashMovement = useCallback(async (movement: CashMovement) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O movimento de caixa nao foi salvo.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -281,7 +290,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel salvar o movimento de caixa no Supabase.");
-      return;
+      return false;
     }
 
     setCashMovements((current) => {
@@ -291,13 +300,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteCashMovement = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O movimento de caixa nao foi excluido.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -306,20 +316,21 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel excluir o movimento de caixa no Supabase.");
-      return;
+      return false;
     }
 
     setCashMovements((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const saveProduct = useCallback(async (product: ProductItem) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O produto nao foi salvo.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -328,7 +339,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel salvar o produto no Supabase.");
-      return;
+      return false;
     }
 
     setProducts((current) => {
@@ -340,13 +351,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteProduct = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O produto nao foi excluido.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -355,20 +367,21 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel excluir o produto no Supabase.");
-      return;
+      return false;
     }
 
     setProducts((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const saveCheck = useCallback(async (check: CheckItem) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O cheque nao foi salvo.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -377,7 +390,7 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel salvar o cheque no Supabase.");
-      return;
+      return false;
     }
 
     setChecks((current) => {
@@ -387,13 +400,14 @@ export function useFiscalStore() {
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const deleteCheck = useCallback(async (id: string) => {
     if (!supabase) {
       setSyncMode("offline");
       window.alert("Supabase nao configurado. O cheque nao foi excluido.");
-      return;
+      return false;
     }
 
     setSyncing(true);
@@ -402,13 +416,14 @@ export function useFiscalStore() {
       setSyncMode("offline");
       setSyncing(false);
       window.alert("Nao foi possivel excluir o cheque no Supabase.");
-      return;
+      return false;
     }
 
     setChecks((current) => current.filter((item) => item.id !== id));
     setSyncMode("supabase");
     setLastSync(new Date().toISOString());
     setSyncing(false);
+    return true;
   }, []);
 
   const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");

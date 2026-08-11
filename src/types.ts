@@ -55,6 +55,10 @@ export interface InvoiceItem {
   cbsRate?: number;
   cbsValue?: number;
   cbsCreditable?: boolean;
+  issqnBase?: number;
+  issqnRate?: number;
+  issqnValue?: number;
+  issqnRetained?: boolean;
   cfemRate: number;
   cfemValue: number;
   materialType?: string;

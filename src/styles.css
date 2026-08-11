@@ -793,6 +793,79 @@ button {
   gap: 18px;
 }
 
+.sales-analysis-filters .filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  width: 100%;
+}
+
+.sales-analysis-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.sales-total-button {
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.sales-total-button:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.sales-value-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.sales-analysis-summary-table {
+  max-height: 420px;
+}
+
+.sales-analysis-modal {
+  border-top-color: var(--blue);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+.sales-analysis-modal h2 {
+  font-size: 22px;
+  margin: 0 0 4px;
+}
+
+.sales-analysis-detail-table {
+  max-height: min(480px, calc(100vh - 240px));
+}
+
+.sales-analysis-detail-table .static-table {
+  min-width: 820px;
+}
+
+.sales-analysis-modal-totals {
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 30px;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.sales-analysis-modal-totals span {
+  display: grid;
+  gap: 4px;
+}
+
 .chart-card {
   min-height: 330px;
 }
@@ -2459,6 +2532,10 @@ tr:last-child td {
 }
 
 @media (max-width: 1180px) {
+  .sales-analysis-filters .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .stats-grid,
   .checks-stats-grid,
   .tax-summary-grid,
@@ -2570,6 +2647,11 @@ tr:last-child td {
 
   .toolbar {
     align-items: stretch;
+  }
+
+  .sales-analysis-filters .filters,
+  .sales-analysis-stats {
+    grid-template-columns: 1fr;
   }
 
   .filters,

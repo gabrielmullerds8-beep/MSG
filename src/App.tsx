@@ -63,6 +63,7 @@ import { AssetItem, CashMovement, CashMovementType, CheckItem, CheckStatus, Fisc
 
 type View =
   | "dashboard"
+  | "sales-analysis"
   | "issued"
   | "new-issued"
   | "received"
@@ -88,8 +89,12 @@ type View =
   | "settings"
   | "backup";
 
+type SaveInvoiceHandler = (invoice: Invoice) => boolean | void | Promise<boolean | void>;
+type SaveOperationHandler = (operation: LinkedOperation) => boolean | void | Promise<boolean | void>;
+
 const views: Array<{ id: View; label: string; icon: any }> = [
   { id: "dashboard", label: "Dashboard", icon: Gauge },
+  { id: "sales-analysis", label: "Análise de Vendas", icon: BarChart3 },
   { id: "dre", label: "DRE", icon: BarChart3 },
   { id: "assets", label: "Patrimônio", icon: Building2 },
   { id: "registrations", label: "Cadastros", icon: Building2 },
@@ -340,6 +345,23 @@ const normalizeNoteNumber = (value?: string | number) => {
   const digits = onlyDigits(value);
   if (!digits) return "";
   return digits.replace(/^0+/, "") || "0";
+};
+
+const findDuplicateInvoice = (invoices: Invoice[], invoice: Invoice) => {
+  const number = normalizeNoteNumber(invoice.invoiceNumber);
+  const series = String(invoice.series || "").trim().toLocaleLowerCase("pt-BR");
+  const document = onlyDigits(invoice.partyCnpj);
+  const accessKey = onlyDigits(invoice.accessKey);
+
+  return invoices.find((candidate) => {
+    if (candidate.id === invoice.id || candidate.invoiceType !== invoice.invoiceType) return false;
+    const sameAccessKey = accessKey.length === 44 && onlyDigits(candidate.accessKey) === accessKey;
+    const sameIdentity =
+      normalizeNoteNumber(candidate.invoiceNumber) === number &&
+      String(candidate.series || "").trim().toLocaleLowerCase("pt-BR") === series &&
+      (!document || onlyDigits(candidate.partyCnpj) === document);
+    return sameAccessKey || sameIdentity;
+  });
 };
 
 const cleanNumber = (value: FormDataEntryValue | null) => {
@@ -659,6 +681,7 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   const ipiEnabled = form.get(`ipiEnabled${suffix}`) === "on";
   const ibsEnabled = form.get(`ibsEnabled${suffix}`) === "on";
   const cbsEnabled = form.get(`cbsEnabled${suffix}`) === "on";
+  const issqnEnabled = form.get(`issqnEnabled${suffix}`) === "on";
   const icmsRate = icmsEnabled ? cleanNumber(form.get(`icmsRate${suffix}`)) : 0;
   const icmsBase = icmsEnabled ? taxBase : 0;
   const icmsValue = icmsEnabled ? cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100 : 0;
@@ -677,6 +700,9 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
   const cbsRate = cbsEnabled ? cleanNumber(form.get(`cbsRate${suffix}`)) : 0;
   const cbsBase = cbsEnabled ? taxBase : 0;
   const cbsValue = cbsEnabled ? cleanNumber(form.get(`cbsValue${suffix}`)) || (cbsBase * cbsRate) / 100 : 0;
+  const issqnRate = issqnEnabled ? cleanNumber(form.get(`issqnRate${suffix}`)) : 0;
+  const issqnBase = issqnEnabled ? taxBase : 0;
+  const issqnValue = issqnEnabled ? cleanNumber(form.get(`issqnValue${suffix}`)) || (issqnBase * issqnRate) / 100 : 0;
   const cfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
 
   return {
@@ -720,6 +746,10 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     cbsRate,
     cbsValue,
     cbsCreditable: invoiceType === "received" && cbsEnabled && form.get(`cbsCreditable${suffix}`) === "on",
+    issqnBase,
+    issqnRate,
+    issqnValue,
+    issqnRetained: issqnEnabled && form.get(`issqnRetained${suffix}`) === "on",
     cfemRate: invoiceType === "issued" ? fiscalConfig.cfemRate : 0,
     cfemValue: invoiceType === "issued" ? cfemBase * (fiscalConfig.cfemRate / 100) : 0,
     materialType: String(form.get(`materialType${suffix}`) || ""),
@@ -990,6 +1020,9 @@ function TaxControl({
   creditName,
   creditDefault,
   showCredit,
+  retentionName,
+  retentionDefault,
+  retentionLabel = "Retenção do imposto",
 }: {
   title: string;
   enabledName: string;
@@ -1003,6 +1036,9 @@ function TaxControl({
   creditName?: string;
   creditDefault?: boolean;
   showCredit?: boolean;
+  retentionName?: string;
+  retentionDefault?: boolean;
+  retentionLabel?: string;
 }) {
   return (
     <div className="tax-control-row">
@@ -1023,6 +1059,17 @@ function TaxControl({
           <label className="check tax-credit">
             <input name={creditName} type="checkbox" defaultChecked={creditDefault} />
             {title} creditável
+          </label>
+        )}
+        {retentionName && (
+          <label className="check tax-credit">
+            <input
+              name={retentionName}
+              type="checkbox"
+              defaultChecked={retentionDefault}
+              onChange={(event) => event.currentTarget.form?.dispatchEvent(new Event("input", { bubbles: true }))}
+            />
+            {retentionLabel}
           </label>
         )}
       </div>
@@ -1476,6 +1523,316 @@ function Dashboard({
   );
 }
 
+type SalesAnalysisDetail = {
+  invoiceId: string;
+  invoiceNumber: string;
+  issueDate: string;
+  clientName: string;
+  productName: string;
+  tons: number;
+  amount: number;
+};
+
+const formatTons = (value: number) =>
+  `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 3 }).format(value)} t`;
+
+const invoiceItemTons = (item: InvoiceItem) => {
+  const explicitTons = Number(item.tons || 0);
+  if (explicitTons > 0) return explicitTons;
+
+  const explicitKilograms = Number(item.kilograms || 0);
+  if (explicitKilograms > 0) return explicitKilograms / 1000;
+
+  const unit = String(item.unit || "").trim().toLocaleUpperCase("pt-BR");
+  const quantity = Number(item.quantity || 0);
+  if (["T", "TN", "TON", "TONELADA", "TONELADAS"].includes(unit)) return quantity;
+  if (["KG", "KGS", "QUILOGRAMA", "QUILOGRAMAS"].includes(unit)) return quantity / 1000;
+  return 0;
+};
+
+function SalesAnalysisModal({
+  title,
+  rows,
+  onClose,
+}: {
+  title: string;
+  rows: SalesAnalysisDetail[];
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  const totalTons = rows.reduce((sum, row) => sum + row.tons, 0);
+  const totalAmount = rows.reduce((sum, row) => sum + row.amount, 0);
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="settlement-modal sales-analysis-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="sales-analysis-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="panel-heading">
+          <div>
+            <h2 id="sales-analysis-modal-title">{title}</h2>
+            <p className="muted">Lançamentos que compõem o total selecionado.</p>
+          </div>
+          <button type="button" className="icon-btn" onClick={onClose} title="Fechar" aria-label="Fechar detalhamento">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="table-wrap sales-analysis-detail-table">
+          <table className="static-table compact-table">
+            <thead>
+              <tr>
+                <th>Emissão</th>
+                <th>N° nota</th>
+                <th>Cliente</th>
+                <th>Produto</th>
+                <th>Toneladas</th>
+                <th>Valor vendido</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.invoiceId}-${row.productName}`}>
+                  <td>{formatDate(row.issueDate)}</td>
+                  <td>{row.invoiceNumber || "-"}</td>
+                  <td>{row.clientName || "-"}</td>
+                  <td>{row.productName}</td>
+                  <td>{formatTons(row.tons)}</td>
+                  <td>{formatCurrency(row.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="sales-analysis-modal-totals">
+          <span>Total de toneladas <strong>{formatTons(totalTons)}</strong></span>
+          <span>Valor total <strong>{formatCurrency(totalAmount)}</strong></span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SalesAnalysisView({ invoices, products }: { invoices: Invoice[]; products: ProductItem[] }) {
+  const currentMonth = todayIso().slice(0, 7);
+  const [startDate, setStartDate] = useSessionState("sales-analysis:start-date", `${currentMonth}-01`);
+  const [endDate, setEndDate] = useSessionState("sales-analysis:end-date", todayIso());
+  const [productFilter, setProductFilter] = useSessionState("sales-analysis:product", "");
+  const [clientFilter, setClientFilter] = useSessionState("sales-analysis:client", "");
+  const [detail, setDetail] = useState<{ title: string; rows: SalesAnalysisDetail[] } | null>(null);
+
+  const productById = useMemo(() => new Map(products.map((product) => [product.id, product])), [products]);
+  const issuedSales = useMemo(
+    () => invoices.filter((invoice) =>
+      invoice.invoiceType === "issued" && invoice.status !== "Cancelada" && invoiceConsidersSale(invoice),
+    ),
+    [invoices],
+  );
+
+  const resolveProductName = (item: InvoiceItem) =>
+    productById.get(item.productId || "")?.name || productLabel(item);
+
+  const productOptions = useMemo(() => Array.from(new Set(
+    issuedSales.flatMap((invoice) => invoice.items?.length
+      ? invoice.items.map(resolveProductName)
+      : ["Produto sem descrição"]),
+  )).sort((a, b) => a.localeCompare(b, "pt-BR")), [issuedSales, productById]);
+
+  const clientOptions = useMemo(() => Array.from(new Set(
+    issuedSales.map((invoice) => invoice.partyName || "Cliente sem nome"),
+  )).sort((a, b) => a.localeCompare(b, "pt-BR")), [issuedSales]);
+
+  useEffect(() => {
+    if (productFilter && !productOptions.includes(productFilter)) setProductFilter("");
+  }, [productFilter, productOptions, setProductFilter]);
+
+  useEffect(() => {
+    if (clientFilter && !clientOptions.includes(clientFilter)) setClientFilter("");
+  }, [clientFilter, clientOptions, setClientFilter]);
+
+  const filteredDetails = useMemo(() => {
+    const details = new Map<string, SalesAnalysisDetail>();
+
+    issuedSales
+      .filter((invoice) => (!startDate || invoice.issueDate >= startDate) && (!endDate || invoice.issueDate <= endDate))
+      .filter((invoice) => !clientFilter || (invoice.partyName || "Cliente sem nome") === clientFilter)
+      .forEach((invoice) => {
+        const items = invoice.items?.length ? invoice.items : [];
+        const invoiceAmount = invoiceFinancialAmount(invoice);
+        const itemBaseTotal = items.reduce((sum, item) => sum + Math.max(Number(item.totalValue || 0), 0), 0);
+
+        if (!items.length) {
+          if (productFilter && productFilter !== "Produto sem descrição") return;
+          details.set(`${invoice.id}:Produto sem descrição`, {
+            invoiceId: invoice.id,
+            invoiceNumber: normalizeNoteNumber(invoice.invoiceNumber),
+            issueDate: invoice.issueDate,
+            clientName: invoice.partyName || "Cliente sem nome",
+            productName: "Produto sem descrição",
+            tons: 0,
+            amount: invoiceAmount,
+          });
+          return;
+        }
+
+        items.forEach((item, index) => {
+          const productName = resolveProductName(item);
+          if (productFilter && productName !== productFilter) return;
+          const itemBase = Math.max(Number(item.totalValue || 0), 0);
+          const allocatedAmount = itemBaseTotal > 0
+            ? invoiceAmount * (itemBase / itemBaseTotal)
+            : index === 0
+              ? invoiceAmount
+              : 0;
+          const key = `${invoice.id}:${productName}`;
+          const current = details.get(key);
+          if (current) {
+            current.tons += invoiceItemTons(item);
+            current.amount += allocatedAmount;
+          } else {
+            details.set(key, {
+              invoiceId: invoice.id,
+              invoiceNumber: normalizeNoteNumber(invoice.invoiceNumber),
+              issueDate: invoice.issueDate,
+              clientName: invoice.partyName || "Cliente sem nome",
+              productName,
+              tons: invoiceItemTons(item),
+              amount: allocatedAmount,
+            });
+          }
+        });
+      });
+
+    return Array.from(details.values()).sort((a, b) =>
+      b.issueDate.localeCompare(a.issueDate) || a.invoiceNumber.localeCompare(b.invoiceNumber, "pt-BR", { numeric: true }),
+    );
+  }, [issuedSales, productById, startDate, endDate, clientFilter, productFilter]);
+
+  const productSummaries = useMemo(() => {
+    const summaries = new Map<string, { productName: string; tons: number; amount: number; rows: SalesAnalysisDetail[] }>();
+    filteredDetails.forEach((row) => {
+      const current = summaries.get(row.productName) || { productName: row.productName, tons: 0, amount: 0, rows: [] };
+      current.tons += row.tons;
+      current.amount += row.amount;
+      current.rows.push(row);
+      summaries.set(row.productName, current);
+    });
+    return Array.from(summaries.values()).sort((a, b) => b.amount - a.amount || a.productName.localeCompare(b.productName, "pt-BR"));
+  }, [filteredDetails]);
+
+  const totalTons = productSummaries.reduce((sum, item) => sum + item.tons, 0);
+  const totalAmount = productSummaries.reduce((sum, item) => sum + item.amount, 0);
+  const invalidPeriod = Boolean(startDate && endDate && startDate > endDate);
+
+  return (
+    <div className="view-stack sales-analysis-view">
+      <section className="toolbar sales-analysis-filters">
+        <div className="filters">
+          <label className="field">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} />
+          </label>
+          <label className="field">
+            <span>Produto</span>
+            <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)}>
+              <option value="">Todos os produtos</option>
+              {productOptions.map((product) => <option key={product} value={product}>{product}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            <span>Cliente</span>
+            <select value={clientFilter} onChange={(event) => setClientFilter(event.target.value)}>
+              <option value="">Todos os clientes</option>
+              {clientOptions.map((client) => <option key={client} value={client}>{client}</option>)}
+            </select>
+          </label>
+        </div>
+      </section>
+
+      {invalidPeriod && <div className="form-error">A data inicial não pode ser posterior à data final.</div>}
+
+      <section className="stats-grid sales-analysis-stats">
+        <button
+          type="button"
+          className="stat good sales-total-button"
+          onClick={() => filteredDetails.length && setDetail({ title: "Composição das toneladas vendidas", rows: filteredDetails })}
+          disabled={!filteredDetails.length || invalidPeriod}
+        >
+          <span>Total de toneladas vendidas</span>
+          <strong>{formatTons(invalidPeriod ? 0 : totalTons)}</strong>
+        </button>
+        <button
+          type="button"
+          className="stat good sales-total-button"
+          onClick={() => filteredDetails.length && setDetail({ title: "Composição do valor vendido", rows: filteredDetails })}
+          disabled={!filteredDetails.length || invalidPeriod}
+        >
+          <span>Valor total vendido</span>
+          <strong>{formatCurrency(invalidPeriod ? 0 : totalAmount)}</strong>
+        </button>
+      </section>
+
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Vendas por produto</h2>
+            <p className="muted">Clique nos totais para consultar as notas que compõem cada resultado.</p>
+          </div>
+          <span className="muted">{invalidPeriod ? 0 : productSummaries.length} produto(s)</span>
+        </div>
+        <div className="table-wrap sales-analysis-summary-table">
+          <table className="static-table">
+            <thead>
+              <tr>
+                <th>Produto</th>
+                <th>Total de toneladas</th>
+                <th>Valor vendido</th>
+                <th>Notas</th>
+              </tr>
+            </thead>
+            <tbody>
+              {!invalidPeriod && productSummaries.length ? productSummaries.map((summary) => (
+                <tr key={summary.productName}>
+                  <td><strong>{summary.productName}</strong></td>
+                  <td>
+                    <button type="button" className="sales-value-button" onClick={() => setDetail({ title: `Toneladas vendidas: ${summary.productName}`, rows: summary.rows })}>
+                      {formatTons(summary.tons)}
+                    </button>
+                  </td>
+                  <td>
+                    <button type="button" className="sales-value-button" onClick={() => setDetail({ title: `Valor vendido: ${summary.productName}`, rows: summary.rows })}>
+                      {formatCurrency(summary.amount)}
+                    </button>
+                  </td>
+                  <td>{summary.rows.length}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={4}>{invalidPeriod ? "Corrija o período informado." : "Nenhuma venda encontrada para os filtros selecionados."}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {detail && <SalesAnalysisModal title={detail.title} rows={detail.rows} onClose={() => setDetail(null)} />}
+    </div>
+  );
+}
+
 function ChartBreakdownPanel({
   title,
   rows,
@@ -1850,9 +2207,9 @@ function InvoiceForm({
   editingInvoice?: Invoice | null;
   viewOnly?: boolean;
   canEdit?: boolean;
-  onSave: (invoice: Invoice) => boolean | void;
+  onSave: SaveInvoiceHandler;
   onDelete?: (id: string) => void;
-  onOperation: (operation: LinkedOperation) => void;
+  onOperation: SaveOperationHandler;
   onAddParty: (kind: Party["kind"]) => void;
   onEdit?: () => void;
   onDone: () => void;
@@ -1870,6 +2227,11 @@ function InvoiceForm({
   const isServiceReceived = isReceived && documentModel === "NFS-e";
   const isFreightDocument = isReceived && documentModel === "CT-e";
   const isNonProductDocument = isServiceReceived || isFreightDocument;
+  const existingIssqnRetention = editingInvoice?.items?.reduce(
+    (total, item) => total + (item.issqnRetained ? Number(item.issqnValue || 0) : 0),
+    0,
+  ) || 0;
+  const existingManualRetention = Math.max(Number(editingInvoice?.retentionValue || 0) - existingIssqnRetention, 0);
   const partyKind: Party["kind"] = isFreightDocument ? "carrier" : isReceived ? "supplier" : "customer";
   const [linked, setLinked] = useState(editingInvoice?.hasLinkedOperation ?? (isReceived && documentModel === "NF-e"));
   const [itemIndexes, setItemIndexes] = useState(
@@ -1891,7 +2253,8 @@ function InvoiceForm({
     ipi: editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0,
     ibs: editingInvoice?.items?.reduce((total, item) => total + Number(item.ibsValue || 0), 0) || 0,
     cbs: editingInvoice?.items?.reduce((total, item) => total + Number(item.cbsValue || 0), 0) || 0,
-    retention: editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e" ? editingInvoice?.retentionValue || 0 : 0,
+    issqn: editingInvoice?.items?.reduce((total, item) => total + Number(item.issqnValue || 0), 0) || 0,
+    retention: editingInvoice?.retentionValue || 0,
     net: editingInvoice?.totalInvoice || 0,
   }));
   const [financePfTotal, setFinancePfTotal] = useState(
@@ -1907,7 +2270,7 @@ function InvoiceForm({
     Boolean(editingInvoice?.carrierName?.includes("terceiros")) || (!editingInvoice?.freightValue && Boolean(editingInvoice)),
   );
   const [retentionEnabled, setRetentionEnabled] = useState(
-    Boolean((editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e") && editingInvoice?.retentionValue),
+    Boolean((editingInvoice?.natureOperation === "NFS-e" || editingInvoice?.mainCfop === "NFS-e") && existingManualRetention),
   );
   const [formWarnings, setFormWarnings] = useState<string[]>([]);
 
@@ -1931,6 +2294,8 @@ function InvoiceForm({
     let ipi = 0;
     let ibs = 0;
     let cbs = 0;
+    let issqn = 0;
+    let retainedIssqn = 0;
 
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
@@ -1950,8 +2315,7 @@ function InvoiceForm({
     const noteItemFreight = itemIndexes.reduce((total, itemIndex) => total + cleanNumber(formData.get(`itemFreightValue_${itemIndex}`)), 0);
     const noteFreight = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
     const noteDiscount = cleanNumber(formData.get("discountValue"));
-    const noteRetentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
-    const noteTaxBase = Math.max(noteProducts + noteFreight - noteItemDiscounts - noteDiscount - noteRetentionValue, 0);
+    const noteTaxBase = Math.max(noteProducts + noteFreight - noteItemDiscounts - noteDiscount, 0);
 
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
@@ -1979,6 +2343,9 @@ function InvoiceForm({
       const cbsBaseField = form.elements.namedItem(`cbsBase${suffix}`) as HTMLInputElement | null;
       const cbsRateField = form.elements.namedItem(`cbsRate${suffix}`) as HTMLInputElement | null;
       const cbsValueField = form.elements.namedItem(`cbsValue${suffix}`) as HTMLInputElement | null;
+      const issqnBaseField = form.elements.namedItem(`issqnBase${suffix}`) as HTMLInputElement | null;
+      const issqnRateField = form.elements.namedItem(`issqnRate${suffix}`) as HTMLInputElement | null;
+      const issqnValueField = form.elements.namedItem(`issqnValue${suffix}`) as HTMLInputElement | null;
       const updateTaxFields = (
         enabledName: string,
         baseField: HTMLInputElement | null,
@@ -2009,16 +2376,21 @@ function InvoiceForm({
       updateTaxFields("ipiEnabled", ipiBaseField, ipiRateField, ipiValueField);
       updateTaxFields("ibsEnabled", ibsBaseField, ibsRateField, ibsValueField);
       updateTaxFields("cbsEnabled", cbsBaseField, cbsRateField, cbsValueField);
+      updateTaxFields("issqnEnabled", issqnBaseField, issqnRateField, issqnValueField);
       icms += cleanNumber(icmsValueField?.value || null);
       pis += cleanNumber(pisValueField?.value || null);
       cofins += cleanNumber(cofinsValueField?.value || null);
       ipi += cleanNumber(ipiValueField?.value || null);
       ibs += cleanNumber(ibsValueField?.value || null);
       cbs += cleanNumber(cbsValueField?.value || null);
+      const itemIssqn = cleanNumber(issqnValueField?.value || null);
+      issqn += itemIssqn;
+      if (formData.get(`issqnRetained${suffix}`) === "on") retainedIssqn += itemIssqn;
     });
     const freightValue = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
     const discountValue = cleanNumber(formData.get("discountValue"));
-    const retentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
+    const manualRetentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
+    const retentionValue = manualRetentionValue + retainedIssqn;
     const net = Math.max(products + freightValue - discounts - discountValue - retentionValue, 0);
     const amountFields = installmentIndexes
       .map((index) => form.elements.namedItem(`installmentAmount_${index}`) as HTMLInputElement | null)
@@ -2050,7 +2422,7 @@ function InvoiceForm({
       nextWarnings.push("Há item sem centro de custo.");
     }
     const hasEnabledTaxWithoutRate = itemIndexes.some((itemIndex) =>
-      ["icms", "pis", "cofins", "ipi", "ibs", "cbs"].some((tax) => {
+      ["icms", "pis", "cofins", "ipi", "ibs", "cbs", "issqn"].some((tax) => {
         const suffix = `_${itemIndex}`;
         return formData.get(`${tax}Enabled${suffix}`) === "on" && cleanNumber(formData.get(`${tax}Rate${suffix}`)) === 0;
       }),
@@ -2061,7 +2433,7 @@ function InvoiceForm({
       nextWarnings.push("A soma das parcelas está diferente do total líquido da nota.");
     }
     setFormWarnings(Array.from(new Set(nextWarnings)));
-    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, retention: retentionValue, net });
+    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, issqn, retention: retentionValue, net });
     setFinancePfTotal(
       installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
     );
@@ -2075,7 +2447,7 @@ function InvoiceForm({
     updateFormSummaries(event.currentTarget);
   };
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canEdit) return;
     if (isEditing && !window.confirm("Tem certeza que deseja salvar as alterações deste lançamento?")) return;
@@ -2092,17 +2464,27 @@ function InvoiceForm({
     const rawItemDiscounts = itemIndexes.reduce((total, index) => total + cleanNumber(form.get(`discountValue_${index}`)), 0);
     const rawFreightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const rawDiscountValue = cleanNumber(form.get("discountValue"));
-    const rawRetentionValue = isServiceReceived && form.get("retentionEnabled") === "on" ? cleanNumber(form.get("retentionValue")) : 0;
-    const noteTaxBase = Math.max(rawTotalProducts + rawFreightValue - rawItemDiscounts - rawDiscountValue - rawRetentionValue, 0);
+    const noteTaxBase = Math.max(rawTotalProducts + rawFreightValue - rawItemDiscounts - rawDiscountValue, 0);
     const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, noteTaxBase));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const discountValue = cleanNumber(form.get("discountValue"));
-    const retentionType = isServiceReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
-      ? "Retenções de impostos"
-      : "";
-    const retentionValue = retentionType ? cleanNumber(form.get("retentionValue")) : 0;
+    const manualRetentionValue = isServiceReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
+      ? cleanNumber(form.get("retentionValue"))
+      : 0;
+    const issqnRetentionValue = items.reduce(
+      (total, item) => total + (item.issqnRetained ? Number(item.issqnValue || 0) : 0),
+      0,
+    );
+    const retentionValue = manualRetentionValue + issqnRetentionValue;
+    const retentionType = manualRetentionValue > 0 && issqnRetentionValue > 0
+      ? "Retenções de impostos + ISSQN"
+      : issqnRetentionValue > 0
+        ? "ISSQN retido"
+        : manualRetentionValue > 0
+          ? "Retenções de impostos"
+          : "";
     const totalInvoice = Math.max(totalProducts + freightValue - discountValue - itemDiscountTotal - retentionValue, 0);
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
@@ -2219,7 +2601,13 @@ function InvoiceForm({
       financialInstallments,
     };
 
-    const saved = onSave(invoice);
+    const duplicate = findDuplicateInvoice(invoices, invoice);
+    if (duplicate) {
+      window.alert(`Já existe um lançamento com este número, série e cliente/fornecedor (N° ${duplicate.invoiceNumber}).`);
+      return;
+    }
+
+    const saved = await onSave(invoice);
     if (saved === false) return;
 
     if (hasLinkedOperation && !isFreightDocument) {
@@ -2231,7 +2619,7 @@ function InvoiceForm({
           operation.id === operationIdFromInvoices(invoice.invoiceNumber, linkedInvoiceNumber),
       );
 
-      onOperation({
+      const operationSaved = await onOperation({
         id: existingOperation?.id || operationIdFromInvoices(invoice.invoiceNumber, linkedInvoiceNumber),
         companyId: "msg",
         operationType: invoice.linkedOperationType || "Compra com triangulação",
@@ -2255,6 +2643,7 @@ function InvoiceForm({
         createdAt: existingOperation?.createdAt || now,
         updatedAt: now,
       });
+      if (operationSaved === false) return;
     }
 
     onDone();
@@ -2496,6 +2885,19 @@ function InvoiceForm({
                     creditDefault={existingItem?.cbsCreditable ?? true}
                     showCredit={isReceived}
                   />
+                  <TaxControl
+                    title="ISSQN"
+                    enabledName={`issqnEnabled_${itemIndex}`}
+                    defaultChecked={taxIsEnabled(existingItem?.issqnBase, existingItem?.issqnValue, existingItem?.issqnRate)}
+                    baseName={`issqnBase_${itemIndex}`}
+                    baseValue={formatCurrency(existingItem?.issqnBase || 0)}
+                    rateName={`issqnRate_${itemIndex}`}
+                    rateValue={existingItem?.issqnRate || 0}
+                    valueName={`issqnValue_${itemIndex}`}
+                    valueValue={formatCurrency(existingItem?.issqnValue || 0)}
+                    retentionName={`issqnRetained_${itemIndex}`}
+                    retentionDefault={Boolean(existingItem?.issqnRetained)}
+                  />
                 </div>
                 {!isReceived && <div className="subsection-label">Dados do bloco</div>}
                 {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={existingItem?.materialType || ""} sanitize="letters" />}
@@ -2527,6 +2929,7 @@ function InvoiceForm({
           <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />
           <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
           <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
+          <StatCard title="Total ISSQN" value={formatCurrency(itemTotals.issqn)} tone="warn" />
           <StatCard title="Retenções" value={formatCurrency(itemTotals.retention)} tone="danger" />
           <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
         </div>
@@ -2545,7 +2948,7 @@ function InvoiceForm({
               <MoneyField
                 label="Valor das retenções"
                 name="retentionValue"
-                defaultValue={formatCurrency(editingInvoice?.retentionValue || 0)}
+                defaultValue={formatCurrency(existingManualRetention)}
                 autoCalc
               />
             )}
@@ -2989,7 +3392,7 @@ function TaxView({
   const receivedCofins = sumInvoices(receivedTaxable, "cofinsCreditValue");
   const cfemBase = Math.max(issuedRevenue - issuedIcms - issuedPis - issuedCofins, 0);
   const cfemDue = cfemBase * (fiscalConfig.cfemRate / 100);
-  const retainedInvoices = periodInvoices.filter((invoice) => invoice.retentionType === "Retenções de impostos" && Number(invoice.retentionValue || 0) > 0);
+  const retainedInvoices = periodInvoices.filter((invoice) => Number(invoice.retentionValue || 0) > 0);
   const retainedTaxes = sumInvoices(retainedInvoices, "retentionValue");
   const breakdowns: Record<string, TaxBreakdownRow[]> = {
     issuedRevenue: buildRows(issuedTaxable, (invoice) => invoice.totalInvoice),
@@ -3259,7 +3662,7 @@ function FinancialView({
   fixedType,
 }: {
   invoices: Invoice[];
-  onSave: (invoice: Invoice) => boolean | void;
+  onSave: SaveInvoiceHandler;
   onOpenInvoice: (invoice: Invoice) => void;
   bankBalanceValue: number;
   onBankBalanceSave: (value: number) => void;
@@ -3419,7 +3822,7 @@ function FinancialView({
     setSettlementAddition(formatCurrency(mode === "pf" ? entry.installment.pfAdditionValue || 0 : entry.installment.additionValue || 0));
     setSettlementEntry(entry);
   };
-  const saveSettlement = (entry: FinancialEntry) => {
+  const saveSettlement = async (entry: FinancialEntry) => {
     const paymentDate = paymentDates[entry.id] || today;
     if (!ensureEntryOpen(entry, paymentDate)) return;
     const notes = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
@@ -3431,7 +3834,7 @@ function FinancialView({
       ? `Confirmar as alterações deste ${movementLabel}?`
       : `Confirmar ${movementLabel} deste lançamento?`;
     if (!window.confirm(confirmation)) return;
-    const saved = updateInstallment(entry, mode === "pf"
+    const saved = await updateInstallment(entry, mode === "pf"
       ? {
           pfPaid: true,
           pfPaymentDate: paymentDate,
@@ -4395,6 +4798,7 @@ function BillFormView({
   viewOnly = false,
   canEdit = true,
   parties,
+  invoices,
   onSave,
   onDelete,
   onAddParty,
@@ -4405,7 +4809,8 @@ function BillFormView({
   viewOnly?: boolean;
   canEdit?: boolean;
   parties: Party[];
-  onSave: (invoice: Invoice) => boolean | void;
+  invoices: Invoice[];
+  onSave: SaveInvoiceHandler;
   onDelete: (id: string) => void;
   onAddParty: (kind: Party["kind"]) => void;
   onEdit?: () => void;
@@ -4434,7 +4839,7 @@ function BillFormView({
     );
   };
 
-  const submitBill = (event: FormEvent<HTMLFormElement>) => {
+  const submitBill = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (editingBill && !window.confirm("Tem certeza que deseja salvar a alteração desta fatura?")) return;
     if (!selectedParty) {
@@ -4552,7 +4957,13 @@ function BillFormView({
       financialInstallments,
     };
 
-    const saved = onSave(invoice);
+    const duplicate = findDuplicateInvoice(invoices, invoice);
+    if (duplicate) {
+      window.alert(`Já existe uma fatura com este título, série e cliente/fornecedor (N° ${duplicate.invoiceNumber}).`);
+      return;
+    }
+
+    const saved = await onSave(invoice);
     if (saved === false) return;
     onDone();
   };
@@ -6365,7 +6776,11 @@ export default function App() {
       ]).then((results) => {
         if (results.some((result) => result.error)) {
           window.alert("Não foi possível salvar o cadastro no Supabase.");
+          setRegistryParties((latest) => (latest === next ? current : latest));
         }
+      }).catch(() => {
+        window.alert("Não foi possível concluir a comunicação com o Supabase.");
+        setRegistryParties((latest) => (latest === next ? current : latest));
       });
 
       return next;
@@ -6398,7 +6813,7 @@ export default function App() {
     window.alert(blockedPeriodMessage(period));
     return false;
   };
-  const guardedSaveInvoice = (invoice: Invoice) => {
+  const guardedSaveInvoice = async (invoice: Invoice) => {
     const previous = store.invoices.find((item) => item.id === invoice.id);
     const invoiceDataChanged = previous && invoiceDataSnapshot(previous) !== invoiceDataSnapshot(invoice);
     if (previous && !invoiceDataChanged) {
@@ -6423,8 +6838,7 @@ export default function App() {
       window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de alterar a nota.");
       return false;
     }
-    store.saveInvoice(invoice);
-    return true;
+    return store.saveInvoice(invoice);
   };
   const guardedDeleteInvoice = (id: string) => {
     const invoice = store.invoices.find((item) => item.id === id);
@@ -6435,12 +6849,12 @@ export default function App() {
     }
     store.deleteInvoice(id);
   };
-  const guardedSaveLinkedOperation = (operation: LinkedOperation) => {
+  const guardedSaveLinkedOperation = async (operation: LinkedOperation) => {
     const periods = new Set([operationPeriodKey(operation)]);
     const previous = store.linkedOperations.find((item) => item.id === operation.id);
     if (previous) periods.add(operationPeriodKey(previous));
-    if (![...periods].every(ensurePeriodOpen)) return;
-    store.saveLinkedOperation(operation);
+    if (![...periods].every(ensurePeriodOpen)) return false;
+    return store.saveLinkedOperation(operation);
   };
   const guardedDeleteLinkedOperation = (id: string) => {
     const operation = store.linkedOperations.find((item) => item.id === id);
@@ -6510,6 +6924,10 @@ export default function App() {
           <button className={view === "dashboard" ? "active" : ""} onClick={() => { setView("dashboard"); setSidebarOpen(false); }}>
             <Gauge size={18} />
             Dashboard
+          </button>
+          <button className={view === "sales-analysis" ? "active" : ""} onClick={() => { setView("sales-analysis"); setSidebarOpen(false); }}>
+            <BarChart3 size={18} />
+            Análise de Vendas
           </button>
           <div className="nav-group">
             <button
@@ -6657,6 +7075,7 @@ export default function App() {
 
         <div className="content" ref={contentRef}>
           {view === "dashboard" && <Dashboard invoices={store.invoices} operations={store.linkedOperations} totals={store.totals} onView={setView} />}
+          {view === "sales-analysis" && <SalesAnalysisView invoices={store.invoices} products={store.products} />}
           {view === "issued" && (
             <InvoiceList
               type="issued"
@@ -6778,6 +7197,7 @@ export default function App() {
           )}
           {view === "new-bill" && (canEdit || editingInvoice) && (
             <BillFormView
+              invoices={store.invoices}
               editingBill={editingInvoice && isBillInvoice(editingInvoice) ? editingInvoice : null}
               viewOnly={Boolean(editingInvoice) && recordMode === "view"}
               canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}

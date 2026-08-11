@@ -6,7 +6,13 @@ export const formatCurrency = (value: number) =>
     currency: "BRL",
   }).format(value || 0);
 
-export const todayIso = () => new Date().toISOString().slice(0, 10);
+export const todayIso = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 export const newId = (prefix: string) =>
   `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;

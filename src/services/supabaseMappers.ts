@@ -1,5 +1,20 @@
 import { AssetItem, CashMovement, CheckItem, Invoice, InvoiceItem, LinkedOperation, ProductItem } from "../types";
 
+const finiteNumber = (value: unknown) => {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const safeArray = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T[] : []);
+
+const normalizeInvoiceStatus = (value: unknown): Invoice["status"] => {
+  const status = String(value || "").trim();
+  if (status === "Cancelada") return "Cancelada";
+  if (status === "Pendente") return "Pendente";
+  if (status === "Em conferência" || status === "Em conferencia") return "Em conferência";
+  return "Faturada";
+};
+
 export const invoiceToRow = (invoice: Invoice) => ({
   id: invoice.id,
   company_id: invoice.companyId,
@@ -86,31 +101,31 @@ export const rowToInvoice = (row: Record<string, any>): Invoice => ({
   paymentCondition: row.payment_condition,
   paymentMethod: row.payment_method,
   dueDate: row.due_date || undefined,
-  pfValue: Number(row.pf_value || 0),
+  pfValue: finiteNumber(row.pf_value),
   carrierName: row.carrier_name || undefined,
   paymentDate: row.payment_date || undefined,
   paid: Boolean(row.paid),
-  status: row.status,
+  status: normalizeInvoiceStatus(row.status),
   category: row.category || undefined,
   costCenter: row.cost_center || undefined,
-  totalProducts: Number(row.total_products || 0),
-  freightValue: Number(row.freight_value || 0),
-  discountValue: Number(row.discount_value || 0),
+  totalProducts: finiteNumber(row.total_products),
+  freightValue: finiteNumber(row.freight_value),
+  discountValue: finiteNumber(row.discount_value),
   retentionType: row.retention_type || undefined,
-  retentionValue: Number(row.retention_value || 0),
-  totalInvoice: Number(row.total_invoice || 0),
-  icmsBase: Number(row.icms_base || 0),
-  icmsValue: Number(row.icms_value || 0),
-  icmsCreditValue: Number(row.icms_credit_value || 0),
-  pisBase: Number(row.pis_base || 0),
-  pisValue: Number(row.pis_value || 0),
-  pisCreditValue: Number(row.pis_credit_value || 0),
-  cofinsBase: Number(row.cofins_base || 0),
-  cofinsValue: Number(row.cofins_value || 0),
-  cofinsCreditValue: Number(row.cofins_credit_value || 0),
-  cfemBase: Number(row.cfem_base || 0),
-  cfemRate: Number(row.cfem_rate || 0),
-  cfemValue: Number(row.cfem_value || 0),
+  retentionValue: finiteNumber(row.retention_value),
+  totalInvoice: finiteNumber(row.total_invoice),
+  icmsBase: finiteNumber(row.icms_base),
+  icmsValue: finiteNumber(row.icms_value),
+  icmsCreditValue: finiteNumber(row.icms_credit_value),
+  pisBase: finiteNumber(row.pis_base),
+  pisValue: finiteNumber(row.pis_value),
+  pisCreditValue: finiteNumber(row.pis_credit_value),
+  cofinsBase: finiteNumber(row.cofins_base),
+  cofinsValue: finiteNumber(row.cofins_value),
+  cofinsCreditValue: finiteNumber(row.cofins_credit_value),
+  cfemBase: finiteNumber(row.cfem_base),
+  cfemRate: finiteNumber(row.cfem_rate),
+  cfemValue: finiteNumber(row.cfem_value),
   taxBenefit: row.tax_benefit || undefined,
   legalBasis: row.legal_basis || undefined,
   additionalInfo: row.additional_info || undefined,
@@ -124,8 +139,8 @@ export const rowToInvoice = (row: Record<string, any>): Invoice => ({
   physicalReceiverName: row.physical_receiver_name || undefined,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
-  items: (row.items || []) as InvoiceItem[],
-  financialInstallments: row.financial_installments || [],
+  items: safeArray<InvoiceItem>(row.items),
+  financialInstallments: safeArray(row.financial_installments),
 });
 
 export const operationToRow = (op: LinkedOperation) => ({
@@ -171,7 +186,7 @@ export const rowToOperation = (row: Record<string, any>): LinkedOperation => ({
   mainAccessKey: row.main_access_key || undefined,
   linkedAccessKey: row.linked_access_key || undefined,
   operationDate: row.operation_date,
-  amount: Number(row.amount || 0),
+  amount: finiteNumber(row.amount),
   status: row.status,
   notes: row.notes || "",
   createdAt: row.created_at,
@@ -199,7 +214,7 @@ export const rowToAsset = (row: Record<string, any>): AssetItem => ({
   itemType: row.item_type,
   itemName: row.item_name,
   acquisitionDate: row.acquisition_date,
-  acquisitionValue: Number(row.acquisition_value || 0),
+  acquisitionValue: finiteNumber(row.acquisition_value),
   plate: row.plate || undefined,
   registrationNumber: row.registration_number || undefined,
   situation: row.situation || (row.archived ? "Vendido" : "Próprio"),
@@ -235,7 +250,7 @@ export const rowToCashMovement = (row: Record<string, any>): CashMovement => ({
   costCenter: row.cost_center || "",
   destinationCostCenter: row.destination_cost_center || undefined,
   history: row.history || "",
-  amount: Number(row.amount || 0),
+  amount: finiteNumber(row.amount),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -308,7 +323,7 @@ export const checkToRow = (check: CheckItem) => ({
 export const rowToCheck = (row: Record<string, any>): CheckItem => ({
   id: row.id,
   checkNumber: row.check_number,
-  amount: Number(row.amount || 0),
+  amount: finiteNumber(row.amount),
   issuerName: row.issuer_name,
   issuerDocument: row.issuer_document || "",
   bank: row.bank || "",
@@ -332,10 +347,10 @@ export const rowToCheck = (row: Record<string, any>): CheckItem => ({
   recoveryReason: row.recovery_reason || undefined,
   canceledDate: row.canceled_date || undefined,
   canceledReason: row.canceled_reason || undefined,
-  relatedInvoices: row.related_invoices || [],
+  relatedInvoices: safeArray<string>(row.related_invoices),
   notes: row.notes || "",
   status: row.status,
-  movements: row.movements || [],
+  movements: safeArray(row.movements),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
