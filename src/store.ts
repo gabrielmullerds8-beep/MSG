@@ -426,6 +426,136 @@ export function useFiscalStore() {
     return true;
   }, []);
 
+  const migrateConfigurationReferences = useCallback(async (
+    listName: string,
+    previousValue: string,
+    nextValue: string | null,
+  ) => {
+    if (!supabase) {
+      setSyncMode("offline");
+      window.alert("Supabase nao configurado. Os lancamentos vinculados nao foram atualizados.");
+      return false;
+    }
+
+    const replacement = nextValue || "";
+    const previousCfopCode = previousValue.split(" - ")[0].trim();
+    const nextCfopCode = nextValue ? nextValue.split(" - ")[0].trim() : "";
+    const replaceExact = (value?: string) => value === previousValue ? replacement : value;
+    const replaceCfop = (value?: string) => value === previousCfopCode ? nextCfopCode : value;
+    const replaceInstallments = (invoice: Invoice) => (invoice.financialInstallments || []).map((installment) => ({
+      ...installment,
+      paymentCondition: listName === "paymentConditions" ? replaceExact(installment.paymentCondition) || "" : installment.paymentCondition,
+      paymentMethod: listName === "paymentMethods" ? replaceExact(installment.paymentMethod) || "" : installment.paymentMethod,
+      holder: listName === "holders" ? replaceExact(installment.holder) : installment.holder,
+      pfHolder: listName === "holders" ? replaceExact(installment.pfHolder) : installment.pfHolder,
+    }));
+    const categoryList = listName === "categories" || listName === "financialCategories";
+    const now = new Date().toISOString();
+
+    const nextInvoices = invoices.map((invoice) => {
+      const candidate = {
+        ...invoice,
+        operationType: listName === "operationTypes" ? replaceExact(invoice.operationType) || "" : invoice.operationType,
+        mainCfop: listName === "cfops" ? replaceCfop(invoice.mainCfop) || "" : invoice.mainCfop,
+        status: listName === "invoiceStatuses" ? replaceExact(invoice.status) || "" : invoice.status,
+        category: categoryList ? replaceExact(invoice.category) : invoice.category,
+        costCenter: listName === "costCenters" ? replaceExact(invoice.costCenter) : invoice.costCenter,
+        paymentCondition: listName === "paymentConditions" ? replaceExact(invoice.paymentCondition) || "" : invoice.paymentCondition,
+        paymentMethod: listName === "paymentMethods" ? replaceExact(invoice.paymentMethod) || "" : invoice.paymentMethod,
+        linkedOperationType: listName === "linkedTypes" ? replaceExact(invoice.linkedOperationType) : invoice.linkedOperationType,
+        items: invoice.items.map((item) => ({
+          ...item,
+          category: categoryList ? replaceExact(item.category) || "" : item.category,
+          costCenter: listName === "costCenters" ? replaceExact(item.costCenter) || "" : item.costCenter,
+          cfop: listName === "cfops" ? replaceCfop(item.cfop) || "" : item.cfop,
+          cstIcms: listName === "csts" ? replaceExact(item.cstIcms) || "" : item.cstIcms,
+          unit: listName === "units" ? replaceExact(item.unit) || "" : item.unit,
+        })),
+        financialInstallments: replaceInstallments(invoice),
+      };
+      return JSON.stringify(candidate) === JSON.stringify(invoice) ? invoice : { ...candidate, updatedAt: now };
+    });
+    const changedInvoices = nextInvoices.filter((invoice, index) => invoice !== invoices[index]);
+
+    const nextOperations = linkedOperations.map((operation) => {
+      const candidate = {
+        ...operation,
+        operationType: listName === "linkedTypes" ? replaceExact(operation.operationType) || "" : operation.operationType,
+        mainCfop: listName === "cfops" ? replaceCfop(operation.mainCfop) || "" : operation.mainCfop,
+        linkedCfop: listName === "cfops" ? replaceCfop(operation.linkedCfop) || "" : operation.linkedCfop,
+      };
+      return JSON.stringify(candidate) === JSON.stringify(operation) ? operation : { ...candidate, updatedAt: now };
+    });
+    const changedOperations = nextOperations.filter((operation, index) => operation !== linkedOperations[index]);
+
+    const nextProducts = products.map((product) => {
+      const candidate = {
+        ...product,
+        defaultCategory: categoryList ? replaceExact(product.defaultCategory) || "" : product.defaultCategory,
+        defaultCostCenter: listName === "costCenters" ? replaceExact(product.defaultCostCenter) || "" : product.defaultCostCenter,
+        defaultUnit: listName === "units" ? replaceExact(product.defaultUnit) || "" : product.defaultUnit,
+      };
+      return JSON.stringify(candidate) === JSON.stringify(product) ? product : { ...candidate, updatedAt: now };
+    });
+    const changedProducts = nextProducts.filter((product, index) => product !== products[index]);
+
+    const nextCashMovements = cashMovements.map((movement) => {
+      const candidate = {
+        ...movement,
+        holder: listName === "holders" ? replaceExact(movement.holder) || "" : movement.holder,
+        destinationHolder: listName === "holders" ? replaceExact(movement.destinationHolder) : movement.destinationHolder,
+        costCenter: listName === "costCenters" ? replaceExact(movement.costCenter) || "" : movement.costCenter,
+        destinationCostCenter: listName === "costCenters" ? replaceExact(movement.destinationCostCenter) : movement.destinationCostCenter,
+      };
+      return JSON.stringify(candidate) === JSON.stringify(movement) ? movement : { ...candidate, updatedAt: now };
+    });
+    const changedCashMovements = nextCashMovements.filter((movement, index) => movement !== cashMovements[index]);
+
+    const nextChecks = checks.map((check) => {
+      const candidate = {
+        ...check,
+        depositHolder: listName === "holders" ? replaceExact(check.depositHolder) : check.depositHolder,
+        compensationHolder: listName === "holders" ? replaceExact(check.compensationHolder) : check.compensationHolder,
+      };
+      return JSON.stringify(candidate) === JSON.stringify(check) ? check : { ...candidate, updatedAt: now };
+    });
+    const changedChecks = nextChecks.filter((check, index) => check !== checks[index]);
+
+    const writes = [
+      ...(changedInvoices.length ? [supabase.from("invoices").upsert(changedInvoices.map(invoiceToRow))] : []),
+      ...(changedOperations.length ? [supabase.from("linked_operations").upsert(changedOperations.map(operationToRow))] : []),
+      ...(changedProducts.length ? [supabase.from("products").upsert(changedProducts.map(productToRow))] : []),
+      ...(changedCashMovements.length ? [supabase.from("cash_movements").upsert(changedCashMovements.map(cashMovementToRow))] : []),
+      ...(changedChecks.length ? [supabase.from("checks").upsert(changedChecks.map(checkToRow))] : []),
+    ];
+
+    setSyncing(true);
+    const results = await Promise.all(writes);
+    if (results.some((result) => result.error)) {
+      const rollbackWrites = [
+        ...(changedInvoices.length ? [supabase.from("invoices").upsert(changedInvoices.map((item) => invoiceToRow(invoices.find((original) => original.id === item.id)!)))] : []),
+        ...(changedOperations.length ? [supabase.from("linked_operations").upsert(changedOperations.map((item) => operationToRow(linkedOperations.find((original) => original.id === item.id)!)))] : []),
+        ...(changedProducts.length ? [supabase.from("products").upsert(changedProducts.map((item) => productToRow(products.find((original) => original.id === item.id)!)))] : []),
+        ...(changedCashMovements.length ? [supabase.from("cash_movements").upsert(changedCashMovements.map((item) => cashMovementToRow(cashMovements.find((original) => original.id === item.id)!)))] : []),
+        ...(changedChecks.length ? [supabase.from("checks").upsert(changedChecks.map((item) => checkToRow(checks.find((original) => original.id === item.id)!)))] : []),
+      ];
+      await Promise.all(rollbackWrites);
+      setSyncing(false);
+      window.alert("Nao foi possivel atualizar todos os lancamentos vinculados. A alteracao foi desfeita.");
+      return false;
+    }
+
+    if (changedInvoices.length) setInvoices(nextInvoices);
+    if (changedOperations.length) setLinkedOperations(nextOperations);
+    if (changedProducts.length) setProducts(nextProducts);
+    if (changedCashMovements.length) setCashMovements(nextCashMovements);
+    if (changedChecks.length) setChecks(nextChecks);
+    setSyncMode("supabase");
+    setLastSync(now);
+    setSyncing(false);
+    return true;
+  }, [cashMovements, checks, invoices, linkedOperations, products]);
+
   const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
   const received = invoices.filter((invoice) => invoice.invoiceType === "received");
   const taxableIssued = issued.filter(invoiceConsidersSale);
@@ -486,6 +616,7 @@ export function useFiscalStore() {
     deleteProduct,
     saveCheck,
     deleteCheck,
+    migrateConfigurationReferences,
   };
 }
 

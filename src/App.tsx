@@ -229,28 +229,30 @@ const fiscalConfigSnapshot = (): FiscalConfig => ({
 });
 
 const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
-  const mergeList = (current: string[], incoming?: string[]) => Array.from(new Set([...(incoming || []), ...current]));
+  const replaceList = (current: string[], incoming?: string[]) => incoming
+    ? Array.from(new Set(incoming))
+    : [...current];
   fiscalConfig.icmsRate = Number(nextConfig.icmsRate ?? fiscalConfig.icmsRate);
   fiscalConfig.pisRate = Number(nextConfig.pisRate ?? fiscalConfig.pisRate);
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
   fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
   fiscalConfig.bankBalance = Number(nextConfig.bankBalance ?? fiscalConfig.bankBalance ?? 0);
   fiscalConfig.closedPeriods = nextConfig.closedPeriods ? { ...nextConfig.closedPeriods } : { ...(fiscalConfig.closedPeriods || {}) };
-  fiscalConfig.cfops = mergeList(fiscalConfig.cfops, nextConfig.cfops);
-  fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}), ...(nextConfig.cfopRules || {}) };
-  fiscalConfig.csts = mergeList(fiscalConfig.csts, nextConfig.csts);
+  fiscalConfig.cfops = replaceList(fiscalConfig.cfops, nextConfig.cfops);
+  fiscalConfig.cfopRules = nextConfig.cfopRules ? { ...nextConfig.cfopRules } : { ...(fiscalConfig.cfopRules || {}) };
+  fiscalConfig.csts = replaceList(fiscalConfig.csts, nextConfig.csts);
   fiscalConfig.invoiceStatuses = nextConfig.invoiceStatuses
     ? Array.from(new Set(nextConfig.invoiceStatuses))
     : [...configuredInvoiceStatuses()];
-  fiscalConfig.categories = mergeList(fiscalConfig.categories, nextConfig.categories);
-  fiscalConfig.costCenters = mergeList(fiscalConfig.costCenters, nextConfig.costCenters);
-  fiscalConfig.operationTypes = mergeList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
-  fiscalConfig.linkedTypes = mergeList(fiscalConfig.linkedTypes, nextConfig.linkedTypes);
-  fiscalConfig.units = mergeList(fiscalConfig.units || unitOptions, nextConfig.units);
-  fiscalConfig.paymentConditions = mergeList(fiscalConfig.paymentConditions || paymentConditionOptions, nextConfig.paymentConditions);
-  fiscalConfig.paymentMethods = mergeList(fiscalConfig.paymentMethods || paymentMethodOptions, nextConfig.paymentMethods);
-  fiscalConfig.holders = mergeList(fiscalConfig.holders || holderOptions, nextConfig.holders);
-  fiscalConfig.financialCategories = mergeList(fiscalConfig.financialCategories || fiscalConfig.categories, nextConfig.financialCategories);
+  fiscalConfig.categories = replaceList(fiscalConfig.categories, nextConfig.categories);
+  fiscalConfig.costCenters = replaceList(fiscalConfig.costCenters, nextConfig.costCenters);
+  fiscalConfig.operationTypes = replaceList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
+  fiscalConfig.linkedTypes = replaceList(fiscalConfig.linkedTypes, nextConfig.linkedTypes);
+  fiscalConfig.units = replaceList(fiscalConfig.units || unitOptions, nextConfig.units);
+  fiscalConfig.paymentConditions = replaceList(fiscalConfig.paymentConditions || paymentConditionOptions, nextConfig.paymentConditions);
+  fiscalConfig.paymentMethods = replaceList(fiscalConfig.paymentMethods || paymentMethodOptions, nextConfig.paymentMethods);
+  fiscalConfig.holders = replaceList(fiscalConfig.holders || holderOptions, nextConfig.holders);
+  fiscalConfig.financialCategories = replaceList(fiscalConfig.financialCategories || fiscalConfig.categories, nextConfig.financialCategories);
 };
 
 const saveFiscalConfig = async () => {
@@ -6312,7 +6314,15 @@ function ProductsView({
   );
 }
 
-function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolean }) {
+function SettingsView({
+  syncMode,
+  canEdit,
+  onMigrateReferences,
+}: {
+  syncMode: string;
+  canEdit: boolean;
+  onMigrateReferences: (listName: FiscalConfigListName, previousValue: string, nextValue: string | null) => Promise<boolean>;
+}) {
   const [showEditor, setShowEditor] = useState(false);
   const [selectedConfigList, setSelectedConfigList] = useSessionState<FiscalConfigListName>("settings:selected-list", "cfops");
   const [configItemValue, setConfigItemValue] = useState("");
@@ -6419,16 +6429,31 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
 
     if (editingConfigItem) {
       if (!window.confirm("Tem certeza que deseja salvar esta alteração?")) return;
+      if (itemValue !== editingConfigItem.itemValue && getConfigList(editingConfigItem.listName).includes(itemValue)) {
+        window.alert("Já existe uma configuração com esse nome.");
+        return;
+      }
+      const previousConfig = fiscalConfigSnapshot();
       setConfigList(editingConfigItem.listName, getConfigList(editingConfigItem.listName).map((item) =>
         item === editingConfigItem.itemValue ? itemValue : item,
       ));
       applyCfopRule(itemValue, editingConfigItem.itemValue);
+      if (!await saveFiscalConfig()) {
+        applyFiscalConfig(previousConfig);
+        refreshConfigSnapshot();
+        return;
+      }
+      if (!await onMigrateReferences(editingConfigItem.listName, editingConfigItem.itemValue, itemValue)) {
+        applyFiscalConfig(previousConfig);
+        await saveFiscalConfig();
+        refreshConfigSnapshot();
+        return;
+      }
     } else if (!getConfigList(listName).includes(itemValue)) {
       setConfigList(listName, [...getConfigList(listName), itemValue]);
       applyCfopRule(itemValue);
+      if (!await saveFiscalConfig()) return;
     }
-
-    await saveFiscalConfig();
     refreshConfigSnapshot();
     setConfigItemValue("");
     setEditingConfigItem(null);
@@ -6450,13 +6475,24 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
     setShowEditor(true);
   }
 
-  function deleteConfigItem(listName: FiscalConfigListName, itemValue: string) {
+  async function deleteConfigItem(listName: FiscalConfigListName, itemValue: string) {
     if (!window.confirm("Tem certeza que deseja excluir este item?")) return;
+    const previousConfig = fiscalConfigSnapshot();
     setConfigList(listName, getConfigList(listName).filter((item) => item !== itemValue));
     if (listName === "cfops" && fiscalConfig.cfopRules) {
       delete fiscalConfig.cfopRules[getCfopCode(itemValue)];
     }
-    saveFiscalConfig();
+    if (!await saveFiscalConfig()) {
+      applyFiscalConfig(previousConfig);
+      refreshConfigSnapshot();
+      return;
+    }
+    if (!await onMigrateReferences(listName, itemValue, null)) {
+      applyFiscalConfig(previousConfig);
+      await saveFiscalConfig();
+      refreshConfigSnapshot();
+      return;
+    }
     refreshConfigSnapshot();
   }
 
@@ -6945,6 +6981,40 @@ export default function App() {
       return next;
     });
   };
+  const migrateConfigurationReferences = async (
+    listName: FiscalConfigListName,
+    previousValue: string,
+    nextValue: string | null,
+  ) => {
+    const shouldUpdateParties = listName === "categories" || listName === "financialCategories";
+    const changedParties = shouldUpdateParties
+      ? registryParties
+        .filter((party) => party.category === previousValue)
+        .map((party) => ({ ...party, category: nextValue || undefined }))
+      : [];
+
+    if (changedParties.length) {
+      if (!supabase) return false;
+      const { error } = await supabase.from("parties").upsert(changedParties.map(partyToRow), { onConflict: "id" });
+      if (error) {
+        window.alert("Não foi possível atualizar os cadastros vinculados a esta configuração.");
+        return false;
+      }
+      setRegistryParties((current) => current.map((party) =>
+        changedParties.find((changed) => changed.id === party.id) || party,
+      ));
+    }
+
+    const migrated = await store.migrateConfigurationReferences(listName, previousValue, nextValue);
+    if (!migrated && changedParties.length && supabase) {
+      const originals = registryParties.filter((party) => changedParties.some((changed) => changed.id === party.id));
+      await supabase.from("parties").upsert(originals.map(partyToRow), { onConflict: "id" });
+      setRegistryParties((current) => current.map((party) =>
+        originals.find((original) => original.id === party.id) || party,
+      ));
+    }
+    return migrated;
+  };
   const openInvoiceForm = (invoice: Invoice) => {
     setEditingInvoice(invoice);
     setRecordMode("view");
@@ -7400,7 +7470,13 @@ export default function App() {
           {view === "assets" && <AssetsView assets={store.assets} onSave={store.saveAsset} onDelete={store.deleteAsset} />}
           {view === "dre" && <DreView invoices={store.invoices} />}
           {view === "registrations" && <RegistrationsView registryParties={registryParties} setRegistryParties={updateRegistryParties} canEdit={canEdit} initialKind={registrationKind} />}
-          {view === "settings" && <SettingsView syncMode={store.syncMode} canEdit={canEdit} />}
+          {view === "settings" && (
+            <SettingsView
+              syncMode={store.syncMode}
+              canEdit={canEdit}
+              onMigrateReferences={migrateConfigurationReferences}
+            />
+          )}
           {view === "backup" && <BackupView invoices={store.invoices} operations={store.linkedOperations} />}
         </div>
       </main>
