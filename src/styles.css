@@ -1351,6 +1351,36 @@ th {
   font-weight: 800;
 }
 
+.sortable-header {
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.sortable-header:hover,
+.sortable-header:focus-visible {
+  color: #365314;
+  background: #f3f7e9;
+  outline: none;
+}
+
+.sort-indicator {
+  display: inline-block;
+  width: 12px;
+  margin-left: 6px;
+  color: #64748b;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
+.sortable-header[data-sort-direction="asc"] .sort-indicator::before {
+  content: "\25B2";
+}
+
+.sortable-header[data-sort-direction="desc"] .sort-indicator::before {
+  content: "\25BC";
+}
+
 tr:last-child td {
   border-bottom: 0;
 }
@@ -1373,6 +1403,11 @@ tr:last-child td {
 .badge.warn {
   color: #9a3412;
   background: #ffedd5;
+}
+
+.badge.review {
+  color: #854d0e;
+  background: #fef9c3;
 }
 
 .badge.info {

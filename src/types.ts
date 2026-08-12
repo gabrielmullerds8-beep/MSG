@@ -1,10 +1,6 @@
 export type InvoiceType = "issued" | "received";
 
-export type InvoiceStatus =
-  | "Faturada"
-  | "Pendente"
-  | "Cancelada"
-  | "Em conferência";
+export type InvoiceStatus = string;
 
 export type LinkedStatus =
   | "Aberta"
@@ -227,7 +223,7 @@ export interface FiscalConfig {
   cfops: string[];
   cfopRules?: Record<string, CfopRule>;
   csts: string[];
-  ncms: string[];
+  invoiceStatuses?: string[];
   categories: string[];
   costCenters: string[];
   operationTypes: string[];

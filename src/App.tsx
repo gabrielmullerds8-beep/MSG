@@ -172,9 +172,10 @@ const unitOptions = ["UN", "KG", "M3", "TN", "TON", "MT", "PC", "SV", "BR"];
 const holderOptions = ["Itaú", "Sicredi", "Itaú Mailson"];
 const paymentConditionOptions = ["a prazo", "à vista", "sem pagamento"];
 const paymentMethodOptions = ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"];
+const invoiceStatusOptions = ["Faturada", "Pendente", "Cancelada", "Em conferência"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
 type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
-type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "ncms" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories">;
+type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "invoiceStatuses" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories">;
 const configList = (list: string[] | undefined, fallback: string[]) => (list?.length ? list : fallback);
 const operationTypeOptions = [
   "Venda de Produção",
@@ -189,6 +190,7 @@ const operationTypeOptions = [
   "Conhecimento de frete",
 ];
 const configuredHolders = () => configList(fiscalConfig.holders, holderOptions);
+const configuredInvoiceStatuses = () => configList(fiscalConfig.invoiceStatuses, invoiceStatusOptions);
 const configuredPaymentConditions = () => configList(fiscalConfig.paymentConditions, paymentConditionOptions);
 const configuredPaymentMethods = () => configList(fiscalConfig.paymentMethods, paymentMethodOptions);
 const configuredOperationTypes = () => configList(fiscalConfig.operationTypes, operationTypeOptions);
@@ -214,7 +216,7 @@ const fiscalConfigSnapshot = (): FiscalConfig => ({
   cfops: [...fiscalConfig.cfops],
   cfopRules: { ...(fiscalConfig.cfopRules || {}) },
   csts: [...fiscalConfig.csts],
-  ncms: [...fiscalConfig.ncms],
+  invoiceStatuses: [...configuredInvoiceStatuses()],
   categories: [...fiscalConfig.categories],
   costCenters: [...fiscalConfig.costCenters],
   operationTypes: [...configuredOperationTypes()],
@@ -237,7 +239,9 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cfops = mergeList(fiscalConfig.cfops, nextConfig.cfops);
   fiscalConfig.cfopRules = { ...(fiscalConfig.cfopRules || {}), ...(nextConfig.cfopRules || {}) };
   fiscalConfig.csts = mergeList(fiscalConfig.csts, nextConfig.csts);
-  fiscalConfig.ncms = mergeList(fiscalConfig.ncms, nextConfig.ncms);
+  fiscalConfig.invoiceStatuses = nextConfig.invoiceStatuses
+    ? Array.from(new Set(nextConfig.invoiceStatuses))
+    : [...configuredInvoiceStatuses()];
   fiscalConfig.categories = mergeList(fiscalConfig.categories, nextConfig.categories);
   fiscalConfig.costCenters = mergeList(fiscalConfig.costCenters, nextConfig.costCenters);
   fiscalConfig.operationTypes = mergeList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
@@ -774,7 +778,9 @@ function Badge({ value, tone }: { value: string; tone?: "good" | "info" | "warn"
           : value.includes("Cancelada")
     || value.includes("Devolvido")
     ? "danger"
-    : value.includes("Pendente") || value.includes("Aberta")
+          : value === "Em conferência"
+            ? "review"
+            : value.includes("Pendente") || value.includes("Aberta")
       ? "warn"
       : "ok";
   return <span className={`badge ${kind}`}>{value}</span>;
@@ -2730,7 +2736,7 @@ function InvoiceForm({
           <label className="field">
             <span>Status</span>
             <select name="status" defaultValue={editingInvoice?.status || "Faturada"}>
-              {["Faturada", "Pendente", "Cancelada", "Em conferência"].map((status) => (
+              {configuredInvoiceStatuses().map((status) => (
                 <option key={status}>{status}</option>
               ))}
             </select>
@@ -6323,6 +6329,10 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
   }
 
   function getConfigList(listName: FiscalConfigListName) {
+    if (listName === "invoiceStatuses") {
+      if (!fiscalConfig.invoiceStatuses) fiscalConfig.invoiceStatuses = [...invoiceStatusOptions];
+      return fiscalConfig.invoiceStatuses;
+    }
     if (listName === "units") {
       if (!fiscalConfig.units) fiscalConfig.units = [...unitOptions];
       return fiscalConfig.units;
@@ -6348,6 +6358,10 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
   }
 
   function setConfigList(listName: FiscalConfigListName, list: string[]) {
+    if (listName === "invoiceStatuses") {
+      fiscalConfig.invoiceStatuses = list;
+      return;
+    }
     if (listName === "units") {
       fiscalConfig.units = list;
       return;
@@ -6478,7 +6492,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
                 >
                   <option value="cfops">CFOP</option>
                   <option value="csts">CST</option>
-                  <option value="ncms">NCM</option>
+                  <option value="invoiceStatuses">Status das notas</option>
                   <option value="categories">Categoria</option>
                   <option value="costCenters">Centro de custo</option>
                   <option value="operationTypes">Tipo de operação</option>
@@ -6539,7 +6553,7 @@ function SettingsView({ syncMode, canEdit }: { syncMode: string; canEdit: boolea
           {([
             ["cfops", "CFOP", configSnapshot.cfops],
             ["csts", "CST", configSnapshot.csts],
-            ["ncms", "NCM", configSnapshot.ncms],
+            ["invoiceStatuses", "Status das notas", configSnapshot.invoiceStatuses || invoiceStatusOptions],
             ["categories", "Categorias", configSnapshot.categories],
             ["costCenters", "Centro de custos", configSnapshot.costCenters],
             ["operationTypes", "Tipos de operação", configSnapshot.operationTypes || operationTypeOptions],
@@ -6677,6 +6691,137 @@ export default function App() {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [view]);
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+
+    const normalizeSortText = (value: string) => value
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim();
+    const parseSortValue = (rawValue: string) => {
+      const text = normalizeSortText(rawValue);
+      if (!text || text === "-") return { empty: true, kind: "text", value: "" } as const;
+
+      const dateMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+      if (dateMatch) {
+        return {
+          empty: false,
+          kind: "number",
+          value: Date.UTC(Number(dateMatch[3]), Number(dateMatch[2]) - 1, Number(dateMatch[1])),
+        } as const;
+      }
+
+      const compact = text.replace(/\s/g, "");
+      const isCurrencyOrPercent = /^-?(?:R\$)?[\d.]+(?:,\d+)?%?$/.test(compact);
+      if (isCurrencyOrPercent) {
+        const parsed = Number(compact.replace("R$", "").replace("%", "").replace(/\./g, "").replace(",", "."));
+        if (Number.isFinite(parsed)) return { empty: false, kind: "number", value: parsed } as const;
+      }
+
+      if (/^-?\d+(?:[.,]\d+)?$/.test(compact)) {
+        const parsed = Number(compact.replace(",", "."));
+        if (Number.isFinite(parsed)) return { empty: false, kind: "number", value: parsed } as const;
+      }
+
+      return { empty: false, kind: "text", value: text.toLocaleLowerCase("pt-BR") } as const;
+    };
+    const compareValues = (leftText: string, rightText: string, direction: "asc" | "desc") => {
+      const left = parseSortValue(leftText);
+      const right = parseSortValue(rightText);
+      if (left.empty !== right.empty) return left.empty ? 1 : -1;
+      if (left.empty && right.empty) return 0;
+      const result = left.kind === "number" && right.kind === "number"
+        ? Number(left.value) - Number(right.value)
+        : String(left.value).localeCompare(String(right.value), "pt-BR", { numeric: true, sensitivity: "base" });
+      return direction === "asc" ? result : -result;
+    };
+    const cleanups: Array<() => void> = [];
+    const registeredHeaders = new WeakSet<HTMLTableCellElement>();
+    const registerHeader = (header: HTMLTableCellElement) => {
+      if (registeredHeaders.has(header)) return;
+      const table = header.closest("table");
+      const headerRow = header.parentElement;
+      if (!table || !headerRow || header.hasAttribute("colspan") || header.hasAttribute("rowspan")) return;
+      const headerLabel = header.textContent?.trim() || "";
+      if (!headerLabel || /^(ações?|sel\.?|selecionar)$/i.test(normalizeSortText(headerLabel))) return;
+      const columnIndex = Array.from(headerRow.children).indexOf(header);
+      if (columnIndex < 0) return;
+
+      header.classList.add("sortable-header");
+      header.tabIndex = 0;
+      header.setAttribute("role", "button");
+      header.setAttribute("aria-sort", "none");
+      header.title = `Ordenar por ${headerLabel}`;
+      const indicator = document.createElement("span");
+      indicator.className = "sort-indicator";
+      indicator.setAttribute("aria-hidden", "true");
+      header.appendChild(indicator);
+
+      const sortTable = () => {
+        const currentDirection = header.dataset.sortDirection;
+        const direction: "asc" | "desc" = currentDirection === "asc" ? "desc" : "asc";
+        table.querySelectorAll<HTMLTableCellElement>("thead th.sortable-header").forEach((otherHeader) => {
+          otherHeader.dataset.sortDirection = "";
+          otherHeader.setAttribute("aria-sort", "none");
+        });
+        header.dataset.sortDirection = direction;
+        header.setAttribute("aria-sort", direction === "asc" ? "ascending" : "descending");
+
+        table.querySelectorAll<HTMLTableSectionElement>("tbody").forEach((body) => {
+          const rows = Array.from(body.rows);
+          if (rows.length < 2) return;
+          const appendSortedSegment = (segment: HTMLTableRowElement[], beforeRow: HTMLTableRowElement | null) => {
+            segment.forEach((row, originalIndex) => { row.dataset.originalSortIndex = String(originalIndex); });
+            segment.sort((leftRow, rightRow) => {
+              const leftCell = leftRow.cells[columnIndex];
+              const rightCell = rightRow.cells[columnIndex];
+              const compared = compareValues(leftCell?.innerText || "", rightCell?.innerText || "", direction);
+              return compared || Number(leftRow.dataset.originalSortIndex) - Number(rightRow.dataset.originalSortIndex);
+            });
+            segment.forEach((row) => body.insertBefore(row, beforeRow));
+          };
+          let segment: HTMLTableRowElement[] = [];
+          rows.forEach((row) => {
+            const isStructuralRow = row.cells.length !== headerRow.children.length || Array.from(row.cells).some((cell) => cell.colSpan > 1);
+            if (!isStructuralRow) {
+              segment.push(row);
+              return;
+            }
+            appendSortedSegment(segment, row);
+            segment = [];
+          });
+          appendSortedSegment(segment, null);
+        });
+      };
+      const handleClick = () => sortTable();
+      const handleKeyDown = (event: KeyboardEvent) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        sortTable();
+      };
+      header.addEventListener("click", handleClick);
+      header.addEventListener("keydown", handleKeyDown);
+      registeredHeaders.add(header);
+      cleanups.push(() => {
+        header.removeEventListener("click", handleClick);
+        header.removeEventListener("keydown", handleKeyDown);
+        indicator.remove();
+      });
+    };
+    const registerHeaders = () => content
+      .querySelectorAll<HTMLTableCellElement>("table thead th")
+      .forEach(registerHeader);
+    registerHeaders();
+    const observer = new MutationObserver(registerHeaders);
+    observer.observe(content, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+      cleanups.forEach((cleanup) => cleanup());
+    };
+  }, [view, store.invoices, store.linkedOperations, store.products, store.assets, store.cashMovements, store.checks, registryParties]);
 
   useEffect(() => {
     const saveBeforeLeaving = () => saveCurrentViewScroll();

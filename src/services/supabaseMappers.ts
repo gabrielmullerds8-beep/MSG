@@ -9,10 +9,8 @@ const safeArray = <T>(value: unknown): T[] => (Array.isArray(value) ? value as T
 
 const normalizeInvoiceStatus = (value: unknown): Invoice["status"] => {
   const status = String(value || "").trim();
-  if (status === "Cancelada") return "Cancelada";
-  if (status === "Pendente") return "Pendente";
   if (status === "Em conferência" || status === "Em conferencia") return "Em conferência";
-  return "Faturada";
+  return status || "Faturada";
 };
 
 export const invoiceToRow = (invoice: Invoice) => ({
