@@ -890,6 +890,7 @@ function TaxStatCard({
 function Field({
   label,
   name,
+  className = "",
   type = "text",
   defaultValue = "",
   options,
@@ -902,6 +903,7 @@ function Field({
 }: {
   label: string;
   name: string;
+  className?: string;
   type?: string;
   defaultValue?: string | number;
   options?: string[];
@@ -921,7 +923,7 @@ function Field({
   };
 
   return (
-    <label className="field">
+    <label className={`field ${className}`.trim()}>
       <span>{label}</span>
       {options ? (
         <select name={name} defaultValue={defaultValue} required={required}>
@@ -1100,9 +1102,20 @@ function KgField({ label, name, defaultValue = "0,00" }: { label: string; name: 
   );
 }
 
-function CpfCnpjField({ label, name, defaultValue = "" }: { label: string; name: string; defaultValue?: string }) {
+function CpfCnpjField({
+  label,
+  name,
+  defaultValue = "",
+  className = "",
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string;
+  className?: string;
+}) {
   return (
     <Field
+      className={className}
       label={label}
       name={name}
       defaultValue={defaultValue}
@@ -5930,7 +5943,7 @@ function RegistrationsView({
           <div className="panel-title between">
             <h2>{partyMode === "view" ? "Visualizar cadastro" : partyMode === "edit" ? "Alterar cadastro" : "Novo cadastro"}</h2>
           </div>
-          <form className={`form-grid ${partyMode === "view" ? "record-view-mode" : ""}`} onSubmit={saveParty}>
+          <form className={`form-grid registration-form ${partyMode === "view" ? "record-view-mode" : ""}`} onSubmit={saveParty}>
             <fieldset className="form-fieldset form-grid" disabled={partyMode === "view" || !canEdit}>
             <label className="field">
               <span>Tipo</span>
@@ -5940,15 +5953,15 @@ function RegistrationsView({
                 <option value="carrier">Transportadora</option>
               </select>
             </label>
-            <Field label="Nome/Razão social" name="name" defaultValue={selectedPartyRecord?.name || ""} required />
+            <Field className="span-2" label="Nome/Razão social" name="name" defaultValue={selectedPartyRecord?.name || ""} required />
             <CpfCnpjField label="CNPJ/CPF" name="cnpj" defaultValue={selectedPartyRecord?.cnpj || ""} />
             <Field label="Inscrição Estadual" name="ie" defaultValue={selectedPartyRecord?.ie || ""} />
             <Field label="Município" name="city" defaultValue={selectedPartyRecord?.city || ""} />
             <Field label="UF" name="state" defaultValue={selectedPartyRecord?.state || "RS"} />
-            <Field label="Endereço" name="address" defaultValue={selectedPartyRecord?.address || ""} />
             <Field label="Telefone" name="phone" defaultValue={selectedPartyRecord?.phone || ""} />
-            <Field label="E-mail" name="email" type="email" defaultValue={selectedPartyRecord?.email || ""} />
-            {addKind === "supplier" && <Field label="Categoria principal" name="category" defaultValue={selectedPartyRecord?.category || ""} />}
+            <Field className="span-2" label="Endereço" name="address" defaultValue={selectedPartyRecord?.address || ""} />
+            <Field className="span-2" label="E-mail" name="email" type="email" defaultValue={selectedPartyRecord?.email || ""} />
+            {addKind === "supplier" && <Field className="span-2" label="Categoria principal" name="category" defaultValue={selectedPartyRecord?.category || ""} />}
             {addKind === "carrier" && <Field label="Placa padrão" name="plate" defaultValue={selectedPartyRecord?.plate || ""} />}
             </fieldset>
             <div className="form-actions inline">
