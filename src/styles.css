@@ -289,11 +289,13 @@ button {
 
 .content {
   padding: 24px;
+  min-width: 0;
 }
 
 .view-stack {
   display: grid;
   gap: 18px;
+  min-width: 0;
 }
 
 .panel {
@@ -320,10 +322,14 @@ button {
   align-items: center;
   gap: 10px;
   margin-bottom: 14px;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .panel-title h2 {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .between {
@@ -338,6 +344,7 @@ button {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
+  min-width: 0;
   padding: 14px;
 }
 
@@ -346,6 +353,7 @@ button {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .import-button {
@@ -381,6 +389,7 @@ button {
   border-radius: 8px;
   background: #fff7ed;
   color: #9a3412;
+  flex-wrap: wrap;
 }
 
 .import-warnings {
@@ -405,6 +414,13 @@ button {
   align-items: end;
   gap: 12px;
   flex: 1;
+  min-width: 0;
+}
+
+.toolbar > *,
+.filters > *,
+.form-actions > * {
+  min-width: 0;
 }
 
 .field {
@@ -442,6 +458,11 @@ button {
   color: #0f172a;
   padding: 8px 10px;
   outline: none;
+  text-overflow: ellipsis;
+}
+
+.field select {
+  overflow: hidden;
 }
 
 .field textarea {
@@ -466,7 +487,12 @@ button {
   justify-content: center;
   gap: 8px;
   font-weight: 700;
-  white-space: nowrap;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .btn.primary {
@@ -635,6 +661,7 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .tax-popover-table {
@@ -910,6 +937,19 @@ button {
   gap: 18px;
 }
 
+.split-grid > *,
+.tax-grid > *,
+.chart-grid > *,
+.form-grid > *,
+.settings-grid > *,
+.registration-filter-grid > *,
+.bill-filter-grid > *,
+.asset-card-grid > *,
+.checks-layout > *,
+.stats-grid > * {
+  min-width: 0;
+}
+
 .single-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -1028,7 +1068,7 @@ button {
 
 .checks-layout {
   display: grid;
-  grid-template-columns: minmax(720px, 1.25fr) minmax(460px, 0.85fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.85fr);
   gap: 16px;
   align-items: start;
 }
@@ -1557,20 +1597,32 @@ tr:last-child td {
 }
 
 .installment-row {
+  position: relative;
   display: grid;
-  grid-template-columns: 74px repeat(6, minmax(0, 1fr)) 36px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: end;
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfdff;
-  padding: 10px;
+  padding: 12px;
 }
 
-.installment-row strong {
-  align-self: center;
+.installment-row > strong {
+  grid-column: 1 / -1;
+  padding-right: 42px;
   color: #334155;
   font-size: 13px;
+}
+
+.installment-row .field {
+  min-width: 0;
+}
+
+.installment-row > .icon-btn.danger {
+  position: absolute;
+  top: 8px;
+  right: 8px;
 }
 
 .finance-pf-total {
@@ -1609,6 +1661,8 @@ tr:last-child td {
 .financial-table th,
 .financial-table td {
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .financial-table input[type="checkbox"]:disabled {
@@ -2581,6 +2635,17 @@ tr:last-child td {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .registration-filter-grid,
+  .bill-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .kind-tabs,
+  .registration-search,
+  .bill-filter-grid > :first-child {
+    grid-column: 1 / -1;
+  }
+
   .stat-spacer {
     display: none;
   }
@@ -2685,6 +2750,23 @@ tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .registration-filter-grid,
+  .bill-filter-grid,
+  .tax-fields,
+  .retention-box,
+  .settlement-grid,
+  .asset-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kind-tabs,
+  .registration-search,
+  .bill-filter-grid > :first-child,
+  .settlement-grid .wide,
+  .asset-detail-grid > div.wide {
+    grid-column: auto;
+  }
+
   .filters,
   .field {
     min-width: 100%;
@@ -2710,6 +2792,10 @@ tr:last-child td {
 
   .installment-row {
     grid-template-columns: 1fr;
+  }
+
+  .installment-row > strong {
+    grid-column: auto;
   }
 
   .form-grid .span-2,
