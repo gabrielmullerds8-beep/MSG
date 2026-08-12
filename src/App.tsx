@@ -2324,6 +2324,14 @@ function InvoiceForm({
     if (selectedParty && selectedParty.kind !== partyKind) setSelectedParty(undefined);
   }, [partyKind, selectedParty]);
 
+  const changeDocumentModel = (nextModel: ReceivedDocumentModel) => {
+    setDocumentModel(nextModel);
+    if (nextModel === "CT-e") setSelectedMainCfop("1353");
+    if (nextModel === "NF-e" && (selectedMainCfop === "NFS-e" || selectedMainCfop === "1353")) {
+      setSelectedMainCfop("");
+    }
+  };
+
   const updateFormSummaries = (form: HTMLFormElement) => {
     const formData = new FormData(form);
     let products = 0;
@@ -2711,7 +2719,15 @@ function InvoiceForm({
           {isReceived && (
             <label className="field">
               <span>Tipo de documento</span>
-              <select name="documentModel" value={documentModel} onChange={(event) => setDocumentModel(event.target.value as ReceivedDocumentModel)}>
+              <select
+                name="documentModel"
+                value={documentModel}
+                onInput={(event) => {
+                  event.stopPropagation();
+                  changeDocumentModel(event.currentTarget.value as ReceivedDocumentModel);
+                }}
+                onChange={(event) => changeDocumentModel(event.currentTarget.value as ReceivedDocumentModel)}
+              >
                 <option value="NF-e">NF-e / mercadoria</option>
                 <option value="NFS-e">NFS-e / serviço tomado</option>
                 <option value="CT-e">Conhecimento de frete</option>
