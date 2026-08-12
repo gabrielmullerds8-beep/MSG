@@ -673,21 +673,31 @@ const operationIdFromInvoices = (mainInvoiceNumber: string, linkedInvoiceNumber:
   return main && linked ? `op_${main}_${linked}` : newId("op");
 };
 
-function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainCfop: string, noteTaxBaseOverride?: number): InvoiceItem {
+function makeItem(
+  form: FormData,
+  invoiceType: InvoiceType,
+  index: number,
+  mainCfop: string,
+  noteTaxBaseOverride?: number,
+  documentModel: ReceivedDocumentModel = "NF-e",
+): InvoiceItem {
   const suffix = `_${index}`;
+  const isServiceDocument = invoiceType === "received" && documentModel === "NFS-e";
+  const isFreightDocument = invoiceType === "received" && documentModel === "CT-e";
+  const isNonProductDocument = isServiceDocument || isFreightDocument;
   const quantity = cleanNumber(form.get(`quantity${suffix}`));
   const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
   const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
-  const freightValue = cleanNumber(form.get(`itemFreightValue${suffix}`));
+  const freightValue = isNonProductDocument ? 0 : cleanNumber(form.get(`itemFreightValue${suffix}`));
   const taxBase = noteTaxBaseOverride !== undefined ? noteTaxBaseOverride : cleanNumber(form.get(`taxBase${suffix}`)) || totalValue;
   const icmsEnabled = form.get(`icmsEnabled${suffix}`) === "on";
   const pisEnabled = form.get(`pisEnabled${suffix}`) === "on";
   const cofinsEnabled = form.get(`cofinsEnabled${suffix}`) === "on";
-  const ipiEnabled = form.get(`ipiEnabled${suffix}`) === "on";
+  const ipiEnabled = !isNonProductDocument && form.get(`ipiEnabled${suffix}`) === "on";
   const ibsEnabled = form.get(`ibsEnabled${suffix}`) === "on";
   const cbsEnabled = form.get(`cbsEnabled${suffix}`) === "on";
-  const issqnEnabled = form.get(`issqnEnabled${suffix}`) === "on";
+  const issqnEnabled = !isFreightDocument && form.get(`issqnEnabled${suffix}`) === "on";
   const icmsRate = icmsEnabled ? cleanNumber(form.get(`icmsRate${suffix}`)) : 0;
   const icmsBase = icmsEnabled ? taxBase : 0;
   const icmsValue = icmsEnabled ? cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100 : 0;
@@ -720,10 +730,10 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     costCenter: String(form.get(`costCenter${suffix}`) || ""),
     accountingAccount: "",
     productColor: String(form.get(`productColor${suffix}`) || ""),
-    ncm: String(form.get(`ncm${suffix}`) || ""),
+    ncm: isNonProductDocument ? "" : String(form.get(`ncm${suffix}`) || ""),
     cfop: mainCfop,
-    cstIcms: String(form.get(`cstIcms${suffix}`) || "000"),
-    unit: String(form.get(`unit${suffix}`) || "UN"),
+    cstIcms: isNonProductDocument ? "" : String(form.get(`cstIcms${suffix}`) || "000"),
+    unit: isNonProductDocument ? "" : String(form.get(`unit${suffix}`) || "UN"),
     quantity,
     unitValue,
     totalValue,
@@ -764,6 +774,9 @@ function makeItem(form: FormData, invoiceType: InvoiceType, index: number, mainC
     blockQuality: String(form.get(`blockQuality${suffix}`) || ""),
     blockMeasures: String(form.get(`blockMeasures${suffix}`) || ""),
     kilograms: cleanNumber(form.get(`kilograms${suffix}`)),
+    transportedInvoiceNumber: isFreightDocument
+      ? normalizeNoteNumber(String(form.get(`transportedInvoiceNumber${suffix}`) || ""))
+      : "",
     notes: String(form.get(`itemNotes${suffix}`) || ""),
   };
 }
@@ -2299,6 +2312,12 @@ function InvoiceForm({
   useEffect(() => {
     if ((documentModel === "NFS-e" || documentModel === "CT-e") && !editingInvoice?.hasLinkedOperation) setLinked(false);
     if (documentModel === "CT-e" && !selectedMainCfop) setSelectedMainCfop("1353");
+    setItemTotals((current) => ({
+      ...current,
+      freightItems: documentModel === "NF-e" ? current.freightItems : 0,
+      ipi: documentModel === "NF-e" ? current.ipi : 0,
+      issqn: documentModel === "CT-e" ? 0 : current.issqn,
+    }));
   }, [documentModel, editingInvoice?.hasLinkedOperation]);
 
   useEffect(() => {
@@ -2487,7 +2506,7 @@ function InvoiceForm({
     const rawFreightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
     const rawDiscountValue = cleanNumber(form.get("discountValue"));
     const noteTaxBase = Math.max(rawTotalProducts + rawFreightValue - rawItemDiscounts - rawDiscountValue, 0);
-    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, noteTaxBase));
+    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, noteTaxBase, currentDocumentModel as ReceivedDocumentModel));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
@@ -2812,17 +2831,33 @@ function InvoiceForm({
                 )}
                 {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
                 {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || selectedProduct?.defaultCostCenter || ""} />}
-                <Field label={isNonProductDocument ? "NCM (opcional)" : "NCM"} name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required={!isNonProductDocument} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
-                <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={existingItem?.cstIcms || ""} />
-                <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={existingItem?.unit || selectedProduct?.defaultUnit || (isNonProductDocument ? "SV" : "UN")} />
+                {!isNonProductDocument && (
+                  <>
+                    <Field label="NCM" name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                    <Field label="CST ICMS" name={`cstIcms_${itemIndex}`} options={fiscalConfig.csts} defaultValue={existingItem?.cstIcms || ""} />
+                    <Field label="Unidade" name={`unit_${itemIndex}`} options={fiscalConfig.units || unitOptions} defaultValue={existingItem?.unit || selectedProduct?.defaultUnit || "UN"} />
+                  </>
+                )}
+                {isFreightDocument && (
+                  <Field
+                    label="Nota transportada"
+                    name={`transportedInvoiceNumber_${itemIndex}`}
+                    defaultValue={normalizeNoteNumber(existingItem?.transportedInvoiceNumber || editingInvoice?.linkedInvoiceNumber)}
+                    inputMode="numeric"
+                    sanitize="digits"
+                    pattern="[0-9]*"
+                  />
+                )}
                 <div className="subsection-label">Valores</div>
                 <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(existingItem?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
                 <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
-                <div className="item-freight-demo">
-                  <MoneyField label="Frete do item (demonstrativo)" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
-                </div>
+                {!isNonProductDocument && (
+                  <div className="item-freight-demo">
+                    <MoneyField label="Frete do item (demonstrativo)" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
+                  </div>
+                )}
                 <input name={`taxBase_${itemIndex}`} type="hidden" defaultValue={taxBaseValue} />
                 <div className="subsection-label">Impostos</div>
                 <div className="tax-control-list">
@@ -2868,17 +2903,19 @@ function InvoiceForm({
                     creditDefault={existingItem?.cofinsCreditable ?? true}
                     showCredit={isReceived}
                   />
-                  <TaxControl
-                    title="IPI"
-                    enabledName={`ipiEnabled_${itemIndex}`}
-                    defaultChecked={taxIsEnabled(existingItem?.ipiBase, existingItem?.ipiValue, existingItem?.ipiRate)}
-                    baseName={`ipiBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.ipiBase || 0)}
-                    rateName={`ipiRate_${itemIndex}`}
-                    rateValue={existingItem?.ipiRate || 0}
-                    valueName={`ipiValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.ipiValue || 0)}
-                  />
+                  {!isNonProductDocument && (
+                    <TaxControl
+                      title="IPI"
+                      enabledName={`ipiEnabled_${itemIndex}`}
+                      defaultChecked={taxIsEnabled(existingItem?.ipiBase, existingItem?.ipiValue, existingItem?.ipiRate)}
+                      baseName={`ipiBase_${itemIndex}`}
+                      baseValue={formatCurrency(existingItem?.ipiBase || 0)}
+                      rateName={`ipiRate_${itemIndex}`}
+                      rateValue={existingItem?.ipiRate || 0}
+                      valueName={`ipiValue_${itemIndex}`}
+                      valueValue={formatCurrency(existingItem?.ipiValue || 0)}
+                    />
+                  )}
                   <TaxControl
                     title="IBS"
                     enabledName={`ibsEnabled_${itemIndex}`}
@@ -2907,19 +2944,21 @@ function InvoiceForm({
                     creditDefault={existingItem?.cbsCreditable ?? true}
                     showCredit={isReceived}
                   />
-                  <TaxControl
-                    title="ISSQN"
-                    enabledName={`issqnEnabled_${itemIndex}`}
-                    defaultChecked={taxIsEnabled(existingItem?.issqnBase, existingItem?.issqnValue, existingItem?.issqnRate)}
-                    baseName={`issqnBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.issqnBase || 0)}
-                    rateName={`issqnRate_${itemIndex}`}
-                    rateValue={existingItem?.issqnRate || 0}
-                    valueName={`issqnValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.issqnValue || 0)}
-                    retentionName={`issqnRetained_${itemIndex}`}
-                    retentionDefault={Boolean(existingItem?.issqnRetained)}
-                  />
+                  {!isFreightDocument && (
+                    <TaxControl
+                      title="ISSQN"
+                      enabledName={`issqnEnabled_${itemIndex}`}
+                      defaultChecked={taxIsEnabled(existingItem?.issqnBase, existingItem?.issqnValue, existingItem?.issqnRate)}
+                      baseName={`issqnBase_${itemIndex}`}
+                      baseValue={formatCurrency(existingItem?.issqnBase || 0)}
+                      rateName={`issqnRate_${itemIndex}`}
+                      rateValue={existingItem?.issqnRate || 0}
+                      valueName={`issqnValue_${itemIndex}`}
+                      valueValue={formatCurrency(existingItem?.issqnValue || 0)}
+                      retentionName={`issqnRetained_${itemIndex}`}
+                      retentionDefault={Boolean(existingItem?.issqnRetained)}
+                    />
+                  )}
                 </div>
                 {!isReceived && <div className="subsection-label">Dados do bloco</div>}
                 {!isReceived && <Field label="Tipo do material" name={`materialType_${itemIndex}`} defaultValue={existingItem?.materialType || ""} sanitize="letters" />}
@@ -2944,14 +2983,14 @@ function InvoiceForm({
         <div className="item-totals-grid">
           <StatCard title="Total produtos" value={formatCurrency(itemTotals.products)} tone="info" />
           <StatCard title="Descontos" value={formatCurrency(itemTotals.discounts)} tone="danger" />
-          <StatCard title="Frete por item" value={formatCurrency(itemTotals.freightItems)} tone="warn" />
+          {!isNonProductDocument && <StatCard title="Frete por item" value={formatCurrency(itemTotals.freightItems)} tone="warn" />}
           <StatCard title="Total ICMS" value={formatCurrency(itemTotals.icms)} tone="danger" />
           <StatCard title="Total PIS" value={formatCurrency(itemTotals.pis)} tone="warn" />
           <StatCard title="Total COFINS" value={formatCurrency(itemTotals.cofins)} tone="warn" />
-          <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />
+          {!isNonProductDocument && <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />}
           <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
           <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
-          <StatCard title="Total ISSQN" value={formatCurrency(itemTotals.issqn)} tone="warn" />
+          {!isFreightDocument && <StatCard title="Total ISSQN" value={formatCurrency(itemTotals.issqn)} tone="warn" />}
           <StatCard title="Retenções" value={formatCurrency(itemTotals.retention)} tone="danger" />
           <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
         </div>
@@ -2995,7 +3034,7 @@ function InvoiceForm({
       </section>
 
       <section className={isFreightDocument ? "view-stack" : "split-grid"}>
-        {!isFreightDocument && (
+        {!isNonProductDocument && (
           <section className="panel">
             <h2>Transporte</h2>
             <label className="check transport-third-party">
@@ -3091,7 +3130,7 @@ function InvoiceForm({
         </label>
       </section>
 
-      {isReceived && (
+      {isReceived && !isServiceReceived && (
         <section className="panel emphasis">
           <div className="panel-title between">
             <h2>Operação Vinculada / Triangulação</h2>

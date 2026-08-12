@@ -65,6 +65,7 @@ export interface InvoiceItem {
   cubicMeters?: number;
   kilograms?: number;
   tons?: number;
+  transportedInvoiceNumber?: string;
   notes?: string;
 }
 
