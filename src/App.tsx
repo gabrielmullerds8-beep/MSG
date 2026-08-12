@@ -938,7 +938,7 @@ function Field({
         <select name={name} defaultValue={defaultValue} required={required}>
           <option value="">Selecione</option>
           {options.map((option) => (
-            <option key={option} value={option.split(" - ")[0]}>
+            <option key={option} value={option}>
               {option}
             </option>
           ))}
