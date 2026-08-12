@@ -912,10 +912,11 @@ function Field({
   inputMode?: "text" | "decimal" | "numeric";
   pattern?: string;
   maxLength?: number;
-  sanitize?: "letters" | "digits" | "kg" | "cpfCnpj";
+  sanitize?: "letters" | "productName" | "digits" | "kg" | "cpfCnpj";
 }) {
   const sanitizeValue = (value: string) => {
     if (sanitize === "letters") return value.replace(/[^A-Za-zÀ-ÿ\s]/g, "");
+    if (sanitize === "productName") return value.replace(/[^A-Za-zÀ-ÿ0-9\s.,\/()=+\\|%$&*_\-]/g, "");
     if (sanitize === "digits") return value.replace(/\D/g, "");
     if (sanitize === "kg") return value.replace(/[^\d.,]/g, "");
     if (sanitize === "cpfCnpj") return formatCpfCnpj(value);
@@ -2799,7 +2800,7 @@ function InvoiceForm({
                     <input name={`costCenter_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCostCenter || existingItem?.costCenter || ""} readOnly />
                   </>
                 ) : (
-                  <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="letters" />
+                  <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="productName" />
                 )}
                 {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
                 {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || selectedProduct?.defaultCostCenter || ""} />}
@@ -6209,7 +6210,7 @@ function ProductsView({
           <form className={`form-grid ${productMode === "view" ? "record-view-mode" : ""}`} onSubmit={saveProduct}>
             <fieldset className="form-fieldset form-grid" disabled={productMode === "view" || !canEdit}>
             <Field label="Código do produto" name="code" defaultValue={editingProduct?.code || ""} />
-            <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required />
+            <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required sanitize="productName" />
             <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
             <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
             <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
