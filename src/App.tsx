@@ -229,6 +229,11 @@ const findProductForItem = (products: ProductItem[], item?: InvoiceItem) => {
     const linkedProduct = products.find((product) => product.id === item.productId);
     if (linkedProduct) return linkedProduct;
   }
+  const itemCode = normalizeSearch(item.itemCode);
+  if (itemCode) {
+    const productByCode = products.find((product) => normalizeSearch(product.code) === itemCode);
+    if (productByCode) return productByCode;
+  }
   const itemNcm = onlyDigits(item.ncm);
   const itemDescription = normalizeSearch(item.description);
   return products.find((product) => {
@@ -2404,6 +2409,12 @@ function InvoiceForm({
   ) || 0;
   const existingManualRetention = Math.max(Number(editingInvoice?.retentionValue || 0) - existingIssqnRetention, 0);
   const partyKind: Party["kind"] = isFreightDocument ? "carrier" : isReceived ? "supplier" : "customer";
+  const editingOperation = editingInvoice
+    ? operations.find((operation) =>
+        operation.mainInvoiceId === editingInvoice.id ||
+        normalizeNoteNumber(operation.mainInvoiceNumber) === normalizeNoteNumber(editingInvoice.invoiceNumber),
+      )
+    : undefined;
   const [linked, setLinked] = useState(editingInvoice?.hasLinkedOperation ?? (isReceived && documentModel === "NF-e"));
   const [itemIndexes, setItemIndexes] = useState(
     editingInvoice?.items?.length ? editingInvoice.items.map((_, index) => index) : [0],
@@ -2802,6 +2813,9 @@ function InvoiceForm({
 
     if (hasLinkedOperation && !isFreightDocument) {
       const linkedInvoiceNumber = linkedInvoiceNumberValue;
+      const linkedInvoice = invoices.find(
+        (candidate) => normalizeNoteNumber(candidate.invoiceNumber) === linkedInvoiceNumber,
+      );
       const existingOperation = operations.find(
         (operation) =>
           operation.mainInvoiceId === invoice.id ||
@@ -2812,13 +2826,13 @@ function InvoiceForm({
       const operationSaved = await onOperation({
         id: existingOperation?.id || operationIdFromInvoices(invoice.invoiceNumber, linkedInvoiceNumber),
         companyId: "msg",
-        operationType: invoice.linkedOperationType || "Compra com triangulação",
+        operationType: invoice.linkedOperationType || (isReceived ? "Compra com triangulação" : "Remessa por conta e ordem"),
         mainInvoiceId: invoice.id,
-        linkedInvoiceId: invoices.find((candidate) => candidate.invoiceNumber === linkedInvoiceNumber)?.id,
+        linkedInvoiceId: linkedInvoice?.id,
         mainInvoiceNumber: invoice.invoiceNumber,
         linkedInvoiceNumber,
-        supplierName: invoice.partyName,
-        finalRecipientName: invoice.finalRecipientName || "",
+        supplierName: isReceived ? invoice.partyName : linkedInvoice?.partyName || "",
+        finalRecipientName: invoice.finalRecipientName || (!isReceived ? invoice.partyName : ""),
         finalRecipientCnpj: String(form.get("finalRecipientCnpj") || ""),
         physicalReceiverName: "",
         physicalReceiverCnpj: "",
@@ -3291,7 +3305,7 @@ function InvoiceForm({
         </label>
       </section>
 
-      {isReceived && !isServiceReceived && (
+      {!isServiceReceived && (
         <section className="panel emphasis">
           <div className="panel-title between">
             <h2>Operação Vinculada / Triangulação</h2>
@@ -3302,23 +3316,23 @@ function InvoiceForm({
           </div>
           {linked && (
             <div className="form-grid">
-                <Field label="Tipo de operação vinculada" name="linkedOperationType" options={fiscalConfig.linkedTypes} defaultValue={editingInvoice?.linkedOperationType || (isFreightDocument ? "Vinculação CTE" : "Compra com triangulação")} />
+                <Field label="Tipo de operação vinculada" name="linkedOperationType" options={fiscalConfig.linkedTypes} defaultValue={editingInvoice?.linkedOperationType || editingOperation?.operationType || (isFreightDocument ? "Vinculação CTE" : isReceived ? "Compra com triangulação" : "Remessa por conta e ordem")} />
                 <Field label="Nota vinculada" name="linkedInvoiceNumber" defaultValue={normalizeNoteNumber(editingInvoice?.linkedInvoiceNumber)} />
-                <Field label="Chave nota vinculada" name="linkedAccessKey" />
-                <Field label="CFOP nota vinculada" name="linkedCfop" defaultValue="5923" />
-                <Field label="Destinatário final" name="finalRecipientName" defaultValue={editingInvoice?.finalRecipientName || ""} />
-                <Field label="CNPJ destinatario final" name="finalRecipientCnpj" />
-                <Field label="Data da operação" name="operationDate" type="date" defaultValue={todayIso()} />
-                <MoneyField label="Valor vinculado" name="linkedAmount" defaultValue={formatCurrency(editingInvoice?.totalInvoice || 0)} />
+                <Field label="Chave nota vinculada" name="linkedAccessKey" defaultValue={editingOperation?.linkedAccessKey || ""} />
+                <Field label="CFOP nota vinculada" name="linkedCfop" defaultValue={editingOperation?.linkedCfop || ""} />
+                <Field label="Destinatário final" name="finalRecipientName" defaultValue={editingInvoice?.finalRecipientName || editingOperation?.finalRecipientName || (!isReceived ? editingInvoice?.partyName || "" : "")} />
+                <Field label="CNPJ destinatário final" name="finalRecipientCnpj" defaultValue={editingOperation?.finalRecipientCnpj || ""} />
+                <Field label="Data da operação" name="operationDate" type="date" defaultValue={editingOperation?.operationDate || editingInvoice?.issueDate || todayIso()} />
+                <MoneyField label="Valor vinculado" name="linkedAmount" defaultValue={formatCurrency(editingOperation?.amount ?? editingInvoice?.totalInvoice ?? 0)} />
               <label className="field">
                 <span>Status da operação</span>
-                <select name="linkedStatus" defaultValue="Aberta">
+                <select name="linkedStatus" defaultValue={editingOperation?.status || "Aberta"}>
                   {["Aberta", "Finalizada", "Parcialmente vinculada", "Pendente de XML", "Pendente de conferência", "Cancelada"].map((status) => (
                     <option key={status}>{status}</option>
                   ))}
                 </select>
               </label>
-              <Field label="Observações da operação" name="linkedNotes" />
+              <Field label="Observações da operação" name="linkedNotes" defaultValue={editingOperation?.notes || ""} />
             </div>
           )}
         </section>
@@ -6347,11 +6361,12 @@ function ProductsView({
       .forEach((item) => {
         const name = productLabel(item);
         if (!name || name === "Produto sem descrição") return;
+        const code = String(item.itemCode || "").trim();
         const ncm = onlyDigits(item.ncm);
-        const key = `${normalizeSearch(name)}|${ncm}`;
+        const key = code ? `code:${normalizeSearch(code)}` : `product:${normalizeSearch(name)}|${ncm}`;
         if (catalog.has(key)) return;
         catalog.set(key, {
-          code: String(item.itemCode || "").trim(),
+          code,
           name,
           ncm,
           defaultCostCenter: "",
@@ -6367,7 +6382,10 @@ function ProductsView({
 
   useEffect(() => {
     if (!canEdit || !issuedProductSuggestions.length) return;
-    const existingKeys = new Set(products.map((product) => `${normalizeSearch(product.name)}|${onlyDigits(product.ncm)}`));
+    const existingKeys = new Set(products.map((product) => {
+      const code = String(product.code || "").trim();
+      return code ? `code:${normalizeSearch(code)}` : `product:${normalizeSearch(product.name)}|${onlyDigits(product.ncm)}`;
+    }));
     issuedProductSuggestions.forEach(({ key, product }) => {
       if (existingKeys.has(key) || autoRegisteredProducts.current.has(key)) return;
       autoRegisteredProducts.current.add(key);
