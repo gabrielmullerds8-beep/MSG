@@ -1065,6 +1065,8 @@ function MoneyField({
   required,
   autoCalc,
   onChangeValue,
+  manualOverride,
+  defaultManualOverride,
 }: {
   label: string;
   name: string;
@@ -1072,6 +1074,8 @@ function MoneyField({
   required?: boolean;
   autoCalc?: boolean;
   onChangeValue?: (value: string) => void;
+  manualOverride?: boolean;
+  defaultManualOverride?: boolean;
 }) {
   return (
     <label className="field">
@@ -1083,6 +1087,10 @@ function MoneyField({
         placeholder="R$ 0,00"
         inputMode="decimal"
         data-money={autoCalc ? "true" : undefined}
+        data-user-edited={defaultManualOverride ? "true" : undefined}
+        onInput={(event) => {
+          if (manualOverride) event.currentTarget.dataset.userEdited = "true";
+        }}
         onChange={(event) => onChangeValue?.(event.currentTarget.value)}
         onBlur={(event) => {
           event.currentTarget.value = formatMoneyInput(event.currentTarget.value);
@@ -1145,6 +1153,9 @@ function TaxControl({
   retentionDefault?: boolean;
   retentionLabel?: string;
 }) {
+  const preserveInitialBase = defaultChecked && cleanNumber(baseValue) !== 0;
+  const preserveInitialValue = defaultChecked && cleanNumber(valueValue) !== 0;
+
   return (
     <div className="tax-control-row">
       <label className="tax-toggle">
@@ -1152,14 +1163,37 @@ function TaxControl({
           name={enabledName}
           type="checkbox"
           defaultChecked={defaultChecked}
-          onChange={(event) => event.currentTarget.form?.dispatchEvent(new Event("input", { bubbles: true }))}
+          onChange={(event) => {
+            const form = event.currentTarget.form;
+            if (!event.currentTarget.checked && form) {
+              const baseField = form.elements.namedItem(baseName) as HTMLInputElement | null;
+              const valueField = form.elements.namedItem(valueName) as HTMLInputElement | null;
+              if (baseField) delete baseField.dataset.userEdited;
+              if (valueField) delete valueField.dataset.userEdited;
+            }
+            form?.dispatchEvent(new Event("input", { bubbles: true }));
+          }}
         />
         <span>{title}</span>
       </label>
       <div className="tax-fields">
-        <MoneyField label={`Base ${title}`} name={baseName} defaultValue={baseValue} autoCalc />
+        <MoneyField
+          label={`Base ${title}`}
+          name={baseName}
+          defaultValue={baseValue}
+          autoCalc
+          manualOverride
+          defaultManualOverride={preserveInitialBase}
+        />
         <PercentField label={`Alíquota ${title} %`} name={rateName} defaultValue={rateValue} />
-        <MoneyField label={`Valor ${title}`} name={valueName} defaultValue={valueValue} autoCalc />
+        <MoneyField
+          label={`Valor ${title}`}
+          name={valueName}
+          defaultValue={valueValue}
+          autoCalc
+          manualOverride
+          defaultManualOverride={preserveInitialValue}
+        />
         {showCredit && creditName && (
           <label className="check tax-credit">
             <input name={creditName} type="checkbox" defaultChecked={creditDefault} />
@@ -2506,11 +2540,14 @@ function InvoiceForm({
         valueField: HTMLInputElement | null,
       ) => {
         const enabled = formData.get(`${enabledName}${suffix}`) === "on";
-        const base = enabled ? taxBase : 0;
-        if (baseField) baseField.value = formatCurrency(base);
+        const baseWasEdited = baseField?.dataset.userEdited === "true";
+        const valueWasEdited = valueField?.dataset.userEdited === "true";
+        const base = enabled ? (baseWasEdited ? cleanNumber(baseField?.value || null) : taxBase) : 0;
+        if (baseField && (!baseWasEdited || !enabled)) baseField.value = formatCurrency(base);
         const rate = cleanNumber(rateField?.value || null);
-        const value = enabled && base && rate ? (base * rate) / 100 : 0;
-        if (valueField) valueField.value = formatCurrency(value);
+        const calculatedValue = enabled && base && rate ? (base * rate) / 100 : 0;
+        const value = enabled && valueWasEdited ? cleanNumber(valueField?.value || null) : calculatedValue;
+        if (valueField && (!valueWasEdited || !enabled)) valueField.value = formatCurrency(value);
         return value;
       };
 
