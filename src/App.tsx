@@ -2425,19 +2425,32 @@ function InvoiceForm({
   const [selectedProducts, setSelectedProducts] = useState<Record<number, string>>(() =>
     Object.fromEntries((editingInvoice?.items || []).map((item, index) => [index, item.productId || findProductForItem(products, item)?.id || ""])),
   );
+  const initialItemDiscountTotal = editingInvoice?.items?.reduce((total, item) => total + Number(item.discountValue || 0), 0) || 0;
+  const initialIpiTotal = editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0;
+  const initialNetTotal = editingInvoice
+    ? Math.max(
+        Number(editingInvoice.totalProducts || 0) +
+          Number(editingInvoice.freightValue || 0) +
+          initialIpiTotal -
+          initialItemDiscountTotal -
+          Number(editingInvoice.discountValue || 0) -
+          Number(editingInvoice.retentionValue || 0),
+        0,
+      )
+    : 0;
   const [itemTotals, setItemTotals] = useState(() => ({
     products: editingInvoice?.totalProducts || 0,
-    discounts: editingInvoice?.items?.reduce((total, item) => total + Number(item.discountValue || 0), 0) || editingInvoice?.discountValue || 0,
+    discounts: initialItemDiscountTotal || editingInvoice?.discountValue || 0,
     freightItems: editingInvoice?.items?.reduce((total, item) => total + Number(item.freightValue || 0), 0) || 0,
     icms: editingInvoice?.icmsValue || editingInvoice?.icmsCreditValue || 0,
     pis: editingInvoice?.pisValue || editingInvoice?.pisCreditValue || 0,
     cofins: editingInvoice?.cofinsValue || editingInvoice?.cofinsCreditValue || 0,
-    ipi: editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0,
+    ipi: initialIpiTotal,
     ibs: editingInvoice?.items?.reduce((total, item) => total + Number(item.ibsValue || 0), 0) || 0,
     cbs: editingInvoice?.items?.reduce((total, item) => total + Number(item.cbsValue || 0), 0) || 0,
     issqn: editingInvoice?.items?.reduce((total, item) => total + Number(item.issqnValue || 0), 0) || 0,
     retention: editingInvoice?.retentionValue || 0,
-    net: editingInvoice?.totalInvoice || 0,
+    net: initialNetTotal,
   }));
   const [financePfTotal, setFinancePfTotal] = useState(
     () => editingInvoice?.financialInstallments?.reduce((total, installment) => total + Number(installment.pfValue || 0), 0) || Number(editingInvoice?.pfValue || 0),
@@ -2592,7 +2605,7 @@ function InvoiceForm({
     const discountValue = cleanNumber(formData.get("discountValue"));
     const manualRetentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
     const retentionValue = manualRetentionValue + retainedIssqn;
-    const net = Math.max(products + freightValue - discounts - discountValue - retentionValue, 0);
+    const net = Math.max(products + freightValue + ipi - discounts - discountValue - retentionValue, 0);
     const amountFields = installmentIndexes
       .map((index) => form.elements.namedItem(`installmentAmount_${index}`) as HTMLInputElement | null)
       .filter(Boolean) as HTMLInputElement[];
@@ -2686,7 +2699,8 @@ function InvoiceForm({
         : manualRetentionValue > 0
           ? "Retenções de impostos"
           : "";
-    const totalInvoice = Math.max(totalProducts + freightValue - discountValue - itemDiscountTotal - retentionValue, 0);
+    const ipiValue = items.reduce((total, item) => total + Number(item.ipiValue || 0), 0);
+    const totalInvoice = Math.max(totalProducts + freightValue + ipiValue - discountValue - itemDiscountTotal - retentionValue, 0);
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
       paymentCondition: String(form.get(`paymentCondition_${index}`) || ""),
