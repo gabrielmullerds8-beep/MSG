@@ -1204,21 +1204,31 @@ function PartySelect({
   onChange: (party: Party | undefined) => void;
   onAdd?: (kind: Party["kind"]) => void;
 }) {
-  const [query, setQuery] = useState("");
   const filtered = parties.filter((party) => party.kind === kind && party.active);
-  const suggestions = filtered.filter((party) => normalizeSearch(party.name).includes(normalizeSearch(query))).slice(0, 8);
   const selected = filtered.find((party) => party.id === value);
+  const [query, setQuery] = useState(selected?.name || "");
+  const suggestions = filtered.filter((party) => normalizeSearch(party.name).includes(normalizeSearch(query))).slice(0, 8);
+
+  useEffect(() => {
+    if (selected) setQuery(selected.name);
+  }, [selected?.id, selected?.name]);
+
+  useEffect(() => {
+    setQuery(selected?.name || "");
+  }, [kind]);
 
   return (
     <div className="field party-search">
       <span>{label}</span>
       <input
-        value={query || selected?.name || ""}
+        value={query}
         placeholder={`Buscar ${label.toLowerCase()}`}
         onChange={(event) => {
-          setQuery(event.target.value);
-          if (!event.target.value) onChange(undefined);
+          const nextQuery = event.target.value;
+          setQuery(nextQuery);
+          if (selected && normalizeSearch(nextQuery) !== normalizeSearch(selected.name)) onChange(undefined);
         }}
+        autoComplete="off"
       />
       <input name={name} type="hidden" value={value} readOnly />
       {query && !selected && (
