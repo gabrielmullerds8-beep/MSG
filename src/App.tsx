@@ -630,6 +630,24 @@ const normalizeSearch = (value: string) =>
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
 
+const findPartyForInvoice = (
+  parties: Party[],
+  kind: Party["kind"],
+  invoice?: Invoice | null,
+) => {
+  if (!invoice) return undefined;
+  const candidates = parties.filter((party) => party.kind === kind);
+  const invoiceName = normalizeSearch(invoice.partyName || "").trim();
+  const byName = invoiceName
+    ? candidates.find((party) => normalizeSearch(party.name || "").trim() === invoiceName)
+    : undefined;
+  if (byName) return byName;
+
+  const invoiceDocument = onlyDigits(invoice.partyCnpj);
+  if (!invoiceDocument) return undefined;
+  return candidates.find((party) => onlyDigits(party.cnpj) === invoiceDocument);
+};
+
 const isCloseWord = (word: string, term: string) => {
   if (term.length < 4 || !/[a-z]/.test(term) || Math.abs(word.length - term.length) > 1) return false;
   let differences = Math.abs(word.length - term.length);
@@ -2355,7 +2373,7 @@ function InvoiceForm({
     () => editingInvoice?.financialInstallments?.reduce((total, installment) => total + Number(installment.pfValue || 0), 0) || Number(editingInvoice?.pfValue || 0),
   );
   const [selectedParty, setSelectedParty] = useState<Party | undefined>(() =>
-    parties.find((party) => party.kind === partyKind && (party.name === editingInvoice?.partyName || party.cnpj === editingInvoice?.partyCnpj)),
+    findPartyForInvoice(parties, partyKind, editingInvoice),
   );
   const [selectedCarrier, setSelectedCarrier] = useState<Party | undefined>(() =>
     parties.find((party) => party.kind === "carrier" && party.name === editingInvoice?.carrierName),
@@ -4961,10 +4979,9 @@ function BillFormView({
   const initialKind = editingBill ? billFinancialKind(editingBill) || "payable" : "payable";
   const [entryType, setEntryType] = useState<"payable" | "receivable">(initialKind);
   const [series, setSeries] = useState<"Fatura" | "Recibo">(editingBill?.natureOperation === "Recibo" ? "Recibo" : "Fatura");
-  const [selectedParty, setSelectedParty] = useState<Party | undefined>(() => parties.find((party) =>
-    party.kind === (initialKind === "payable" ? "supplier" : "customer") &&
-    (party.name === editingBill?.partyName || party.cnpj === editingBill?.partyCnpj),
-  ));
+  const [selectedParty, setSelectedParty] = useState<Party | undefined>(() =>
+    findPartyForInvoice(parties, initialKind === "payable" ? "supplier" : "customer", editingBill),
+  );
   const [installmentIndexes, setInstallmentIndexes] = useState(() => editingBill ? invoiceInstallments(editingBill).map((_, index) => index) : [0]);
   const [totalValue, setTotalValue] = useState(() => formatCurrency(editingBill?.totalInvoice || 0));
   const [installmentsTotal, setInstallmentsTotal] = useState(() => editingBill ? invoiceInstallments(editingBill).reduce((total, installment) => total + installmentTotal(installment), 0) : 0);
