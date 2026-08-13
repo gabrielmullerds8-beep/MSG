@@ -175,7 +175,7 @@ const paymentMethodOptions = ["boleto", "depósito bancário", "pix", "dinheiro"
 const invoiceStatusOptions = ["Faturada", "Pendente", "Cancelada", "Em conferência"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
 type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
-type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "invoiceStatuses" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories" | "assetTypes">;
+type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "invoiceStatuses" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "assetTypes">;
 const compareConfigOptions = (left: string, right: string) => left.localeCompare(right, "pt-BR", {
   numeric: true,
   sensitivity: "base",
@@ -198,10 +198,14 @@ const operationTypeOptions = [
 ];
 const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
 const normalizeFiscalConfigLists = () => {
+  const legacyConfig = fiscalConfig as FiscalConfig & { financialCategories?: string[] };
   fiscalConfig.cfops = sortConfigOptions(fiscalConfig.cfops);
   fiscalConfig.csts = sortConfigOptions(fiscalConfig.csts);
   fiscalConfig.invoiceStatuses = sortConfigOptions(fiscalConfig.invoiceStatuses || invoiceStatusOptions);
-  fiscalConfig.categories = sortConfigOptions(fiscalConfig.categories);
+  fiscalConfig.categories = sortConfigOptions([
+    ...fiscalConfig.categories,
+    ...(legacyConfig.financialCategories || []),
+  ]);
   fiscalConfig.costCenters = sortConfigOptions(fiscalConfig.costCenters);
   fiscalConfig.operationTypes = sortConfigOptions(fiscalConfig.operationTypes || operationTypeOptions);
   fiscalConfig.linkedTypes = sortConfigOptions(fiscalConfig.linkedTypes);
@@ -209,7 +213,7 @@ const normalizeFiscalConfigLists = () => {
   fiscalConfig.paymentConditions = sortConfigOptions(fiscalConfig.paymentConditions || paymentConditionOptions);
   fiscalConfig.paymentMethods = sortConfigOptions(fiscalConfig.paymentMethods || paymentMethodOptions);
   fiscalConfig.holders = sortConfigOptions(fiscalConfig.holders || holderOptions);
-  fiscalConfig.financialCategories = sortConfigOptions(fiscalConfig.financialCategories || fiscalConfig.categories);
+  delete legacyConfig.financialCategories;
   fiscalConfig.assetTypes = sortConfigOptions(fiscalConfig.assetTypes || assetTypeOptions);
 };
 normalizeFiscalConfigLists();
@@ -250,11 +254,11 @@ const fiscalConfigSnapshot = (): FiscalConfig => ({
   paymentConditions: [...configList(fiscalConfig.paymentConditions, paymentConditionOptions)],
   paymentMethods: [...configList(fiscalConfig.paymentMethods, paymentMethodOptions)],
   holders: [...configList(fiscalConfig.holders, holderOptions)],
-  financialCategories: [...configList(fiscalConfig.financialCategories, fiscalConfig.categories || [])],
   assetTypes: [...configuredAssetTypes()],
 });
 
 const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
+  const legacyNextConfig = nextConfig as Partial<FiscalConfig> & { financialCategories?: string[] };
   const replaceList = (current: string[], incoming?: string[]) => sortConfigOptions(incoming || current);
   fiscalConfig.icmsRate = Number(nextConfig.icmsRate ?? fiscalConfig.icmsRate);
   fiscalConfig.pisRate = Number(nextConfig.pisRate ?? fiscalConfig.pisRate);
@@ -266,7 +270,10 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cfopRules = nextConfig.cfopRules ? { ...nextConfig.cfopRules } : { ...(fiscalConfig.cfopRules || {}) };
   fiscalConfig.csts = replaceList(fiscalConfig.csts, nextConfig.csts);
   fiscalConfig.invoiceStatuses = sortConfigOptions(nextConfig.invoiceStatuses || configuredInvoiceStatuses());
-  fiscalConfig.categories = replaceList(fiscalConfig.categories, nextConfig.categories);
+  fiscalConfig.categories = sortConfigOptions([
+    ...(nextConfig.categories || fiscalConfig.categories),
+    ...(legacyNextConfig.financialCategories || []),
+  ]);
   fiscalConfig.costCenters = replaceList(fiscalConfig.costCenters, nextConfig.costCenters);
   fiscalConfig.operationTypes = replaceList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
   fiscalConfig.linkedTypes = replaceList(fiscalConfig.linkedTypes, nextConfig.linkedTypes);
@@ -274,7 +281,6 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.paymentConditions = replaceList(fiscalConfig.paymentConditions || paymentConditionOptions, nextConfig.paymentConditions);
   fiscalConfig.paymentMethods = replaceList(fiscalConfig.paymentMethods || paymentMethodOptions, nextConfig.paymentMethods);
   fiscalConfig.holders = replaceList(fiscalConfig.holders || holderOptions, nextConfig.holders);
-  fiscalConfig.financialCategories = replaceList(fiscalConfig.financialCategories || fiscalConfig.categories, nextConfig.financialCategories);
   fiscalConfig.assetTypes = replaceList(fiscalConfig.assetTypes || assetTypeOptions, nextConfig.assetTypes);
   normalizeFiscalConfigLists();
 };
@@ -4969,6 +4975,7 @@ function BillFormView({
     }
     const form = new FormData(event.currentTarget);
     const amount = cleanNumber(form.get("totalInvoice"));
+    const category = String(form.get("category") || "");
     const costCenter = String(form.get("costCenter") || "");
     const comment = String(form.get("comment") || "");
     const currentSeries = String(form.get("series") || series);
@@ -5020,7 +5027,7 @@ function BillFormView({
       paymentDate: editingBill?.paymentDate || "",
       paid: Boolean(editingBill?.paid),
       status: "Faturada",
-      category: "Fatura",
+      category,
       costCenter,
       totalProducts: amount,
       freightValue: 0,
@@ -5049,7 +5056,7 @@ function BillFormView({
           id: editingBill?.items?.[0]?.id || newId("item"),
           itemCode: "",
           description: comment || currentSeries,
-          category: "Fatura",
+          category,
           costCenter,
           ncm: "",
           cfop: "Fatura",
@@ -5125,6 +5132,18 @@ function BillFormView({
             />
             <ReadOnlyField label="CNPJ/CPF" name="partyCnpj" value={selectedParty?.cnpj || editingBill?.partyCnpj} />
             <input name="partyName" type="hidden" value={selectedParty?.name || editingBill?.partyName || ""} readOnly />
+            <label className="field">
+              <span>Categoria</span>
+              <select name="category" defaultValue={editingBill?.category || ""} required>
+                <option value="">Selecione</option>
+                {editingBill?.category && !fiscalConfig.categories.includes(editingBill.category) && (
+                  <option value={editingBill.category}>{editingBill.category}</option>
+                )}
+                {fiscalConfig.categories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
+            </label>
             <label className="field">
               <span>Centro de custo</span>
               <select name="costCenter" defaultValue={editingBill?.costCenter || ""} required>
@@ -6454,10 +6473,6 @@ function SettingsView({
       if (!fiscalConfig.holders) fiscalConfig.holders = [...holderOptions];
       return fiscalConfig.holders;
     }
-    if (listName === "financialCategories") {
-      if (!fiscalConfig.financialCategories) fiscalConfig.financialCategories = [...fiscalConfig.categories];
-      return fiscalConfig.financialCategories;
-    }
     if (listName === "assetTypes") {
       if (!fiscalConfig.assetTypes) fiscalConfig.assetTypes = [...assetTypeOptions];
       return fiscalConfig.assetTypes;
@@ -6486,10 +6501,6 @@ function SettingsView({
     }
     if (listName === "holders") {
       fiscalConfig.holders = sortedList;
-      return;
-    }
-    if (listName === "financialCategories") {
-      fiscalConfig.financialCategories = sortedList;
       return;
     }
     if (listName === "assetTypes") {
@@ -6641,7 +6652,6 @@ function SettingsView({
                   <option value="paymentConditions">Forma de pagamento</option>
                   <option value="paymentMethods">Meio de pagamento</option>
                   <option value="holders">Portador</option>
-                  <option value="financialCategories">Categoria financeira</option>
                   <option value="assetTypes">Módulo patrimonial</option>
                 </select>
               </label>
@@ -6703,7 +6713,6 @@ function SettingsView({
             ["paymentConditions", "Formas de pagamento", configSnapshot.paymentConditions || paymentConditionOptions],
             ["paymentMethods", "Meios de pagamento", configSnapshot.paymentMethods || paymentMethodOptions],
             ["holders", "Portadores", configSnapshot.holders || holderOptions],
-            ["financialCategories", "Categorias financeiras", configSnapshot.financialCategories || fiscalConfig.categories],
             ["assetTypes", "Módulo patrimonial", configSnapshot.assetTypes || assetTypeOptions],
           ] as Array<[FiscalConfigListName, string, string[]]>).map(([listName, title, list]) => (
             <section className="settings-list-group" key={listName}>
@@ -7092,7 +7101,7 @@ export default function App() {
     previousValue: string,
     nextValue: string | null,
   ) => {
-    const shouldUpdateParties = listName === "categories" || listName === "financialCategories";
+    const shouldUpdateParties = listName === "categories";
     const changedParties = shouldUpdateParties
       ? registryParties
         .filter((party) => party.category === previousValue)

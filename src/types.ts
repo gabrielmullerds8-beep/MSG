@@ -233,7 +233,6 @@ export interface FiscalConfig {
   paymentConditions?: string[];
   paymentMethods?: string[];
   holders?: string[];
-  financialCategories?: string[];
   assetTypes?: string[];
 }
 

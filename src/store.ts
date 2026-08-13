@@ -449,7 +449,7 @@ export function useFiscalStore() {
       holder: listName === "holders" ? replaceExact(installment.holder) : installment.holder,
       pfHolder: listName === "holders" ? replaceExact(installment.pfHolder) : installment.pfHolder,
     }));
-    const categoryList = listName === "categories" || listName === "financialCategories";
+    const categoryList = listName === "categories";
     const now = new Date().toISOString();
 
     const nextInvoices = invoices.map((invoice) => {

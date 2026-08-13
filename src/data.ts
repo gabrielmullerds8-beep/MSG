@@ -65,6 +65,13 @@ export const fiscalConfig: FiscalConfig = {
     "Uso e consumo",
     "Segurança/EPI",
     "Outros",
+    "Vendas",
+    "Compras",
+    "Fretes",
+    "Serviços",
+    "Manutenção",
+    "Administrativo",
+    "Financeiro",
   ],
   costCenters: [
     "Produção - Lavra",
@@ -107,7 +114,6 @@ export const fiscalConfig: FiscalConfig = {
   paymentConditions: ["a prazo", "à vista", "sem pagamento"],
   paymentMethods: ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"],
   holders: ["Itaú", "Sicredi", "Itaú Mailson"],
-  financialCategories: ["Vendas", "Compras", "Fretes", "Serviços", "Manutenção", "Administrativo", "Financeiro"],
   assetTypes: ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"],
 };
 
