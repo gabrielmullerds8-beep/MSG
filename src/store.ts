@@ -521,12 +521,22 @@ export function useFiscalStore() {
     });
     const changedChecks = nextChecks.filter((check, index) => check !== checks[index]);
 
+    const nextAssets = assets.map((asset) => {
+      const candidate = {
+        ...asset,
+        itemType: listName === "assetTypes" ? replaceExact(asset.itemType) || "" : asset.itemType,
+      };
+      return JSON.stringify(candidate) === JSON.stringify(asset) ? asset : { ...candidate, updatedAt: now };
+    });
+    const changedAssets = nextAssets.filter((asset, index) => asset !== assets[index]);
+
     const writes = [
       ...(changedInvoices.length ? [supabase.from("invoices").upsert(changedInvoices.map(invoiceToRow))] : []),
       ...(changedOperations.length ? [supabase.from("linked_operations").upsert(changedOperations.map(operationToRow))] : []),
       ...(changedProducts.length ? [supabase.from("products").upsert(changedProducts.map(productToRow))] : []),
       ...(changedCashMovements.length ? [supabase.from("cash_movements").upsert(changedCashMovements.map(cashMovementToRow))] : []),
       ...(changedChecks.length ? [supabase.from("checks").upsert(changedChecks.map(checkToRow))] : []),
+      ...(changedAssets.length ? [supabase.from("assets").upsert(changedAssets.map(assetToRow))] : []),
     ];
 
     setSyncing(true);
@@ -538,6 +548,7 @@ export function useFiscalStore() {
         ...(changedProducts.length ? [supabase.from("products").upsert(changedProducts.map((item) => productToRow(products.find((original) => original.id === item.id)!)))] : []),
         ...(changedCashMovements.length ? [supabase.from("cash_movements").upsert(changedCashMovements.map((item) => cashMovementToRow(cashMovements.find((original) => original.id === item.id)!)))] : []),
         ...(changedChecks.length ? [supabase.from("checks").upsert(changedChecks.map((item) => checkToRow(checks.find((original) => original.id === item.id)!)))] : []),
+        ...(changedAssets.length ? [supabase.from("assets").upsert(changedAssets.map((item) => assetToRow(assets.find((original) => original.id === item.id)!)))] : []),
       ];
       await Promise.all(rollbackWrites);
       setSyncing(false);
@@ -550,11 +561,12 @@ export function useFiscalStore() {
     if (changedProducts.length) setProducts(nextProducts);
     if (changedCashMovements.length) setCashMovements(nextCashMovements);
     if (changedChecks.length) setChecks(nextChecks);
+    if (changedAssets.length) setAssets(nextAssets);
     setSyncMode("supabase");
     setLastSync(now);
     setSyncing(false);
     return true;
-  }, [cashMovements, checks, invoices, linkedOperations, products]);
+  }, [assets, cashMovements, checks, invoices, linkedOperations, products]);
 
   const issued = invoices.filter((invoice) => invoice.invoiceType === "issued");
   const received = invoices.filter((invoice) => invoice.invoiceType === "received");

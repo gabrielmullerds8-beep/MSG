@@ -234,6 +234,7 @@ export interface FiscalConfig {
   paymentMethods?: string[];
   holders?: string[];
   financialCategories?: string[];
+  assetTypes?: string[];
 }
 
 export interface CfopRule {

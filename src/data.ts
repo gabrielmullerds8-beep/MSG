@@ -33,9 +33,9 @@ export const fiscalConfig: FiscalConfig = {
     "2556 - Compra de material para uso ou consumo",
     "1656 - Compra de combustível ou lubrificante",
     "1353 - Aquisição de serviço de transporte",
+    "1933 - Aquisição de serviço",
     "1949 - Outra entrada",
     "5949 - Outra saída",
-    "NFS-e - Serviço tomado",
   ],
   cfopRules: {
     "5101": { considerSale: true },
@@ -45,8 +45,8 @@ export const fiscalConfig: FiscalConfig = {
     "2556": { considerCost: true },
     "1656": { considerCost: true },
     "1353": { considerCost: true },
+    "1933": { considerCost: true },
     "1949": { considerCost: true },
-    "NFS-e": { considerCost: true },
   },
   csts: ["000", "020", "040", "041", "051", "060", "090"],
   invoiceStatuses: ["Faturada", "Pendente", "Cancelada", "Em conferência"],
@@ -108,6 +108,7 @@ export const fiscalConfig: FiscalConfig = {
   paymentMethods: ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"],
   holders: ["Itaú", "Sicredi", "Itaú Mailson"],
   financialCategories: ["Vendas", "Compras", "Fretes", "Serviços", "Manutenção", "Administrativo", "Financeiro"],
+  assetTypes: ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"],
 };
 
 export const getCfopCode = (value: string) => String(value || "").split(" - ")[0].trim();

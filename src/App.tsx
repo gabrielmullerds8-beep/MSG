@@ -175,8 +175,14 @@ const paymentMethodOptions = ["boleto", "depósito bancário", "pix", "dinheiro"
 const invoiceStatusOptions = ["Faturada", "Pendente", "Cancelada", "Em conferência"];
 const blockQualityOptions = ["Primeira", "Segunda", "Terceira", "Quarta", "Quinta"];
 type ReceivedDocumentModel = "NF-e" | "NFS-e" | "CT-e";
-type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "invoiceStatuses" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories">;
-const configList = (list: string[] | undefined, fallback: string[]) => (list?.length ? list : fallback);
+type FiscalConfigListName = keyof Pick<FiscalConfig, "cfops" | "csts" | "invoiceStatuses" | "categories" | "costCenters" | "operationTypes" | "linkedTypes" | "units" | "paymentConditions" | "paymentMethods" | "holders" | "financialCategories" | "assetTypes">;
+const compareConfigOptions = (left: string, right: string) => left.localeCompare(right, "pt-BR", {
+  numeric: true,
+  sensitivity: "base",
+});
+const sortConfigOptions = (list: string[]) => Array.from(new Set(list.map((item) => item.trim()).filter(Boolean)))
+  .sort(compareConfigOptions);
+const configList = (list: string[] | undefined, fallback: string[]) => sortConfigOptions(list?.length ? list : fallback);
 const operationTypeOptions = [
   "Venda de Produção",
   "Devolução",
@@ -185,15 +191,34 @@ const operationTypeOptions = [
   "Remessa para armazenagem",
   "Entrada",
   "Serviço tomado",
+  "Aquisição de serviço",
   "A pagar",
   "Compra com triangulação",
   "Conhecimento de frete",
 ];
+const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
+const normalizeFiscalConfigLists = () => {
+  fiscalConfig.cfops = sortConfigOptions(fiscalConfig.cfops);
+  fiscalConfig.csts = sortConfigOptions(fiscalConfig.csts);
+  fiscalConfig.invoiceStatuses = sortConfigOptions(fiscalConfig.invoiceStatuses || invoiceStatusOptions);
+  fiscalConfig.categories = sortConfigOptions(fiscalConfig.categories);
+  fiscalConfig.costCenters = sortConfigOptions(fiscalConfig.costCenters);
+  fiscalConfig.operationTypes = sortConfigOptions(fiscalConfig.operationTypes || operationTypeOptions);
+  fiscalConfig.linkedTypes = sortConfigOptions(fiscalConfig.linkedTypes);
+  fiscalConfig.units = sortConfigOptions(fiscalConfig.units || unitOptions);
+  fiscalConfig.paymentConditions = sortConfigOptions(fiscalConfig.paymentConditions || paymentConditionOptions);
+  fiscalConfig.paymentMethods = sortConfigOptions(fiscalConfig.paymentMethods || paymentMethodOptions);
+  fiscalConfig.holders = sortConfigOptions(fiscalConfig.holders || holderOptions);
+  fiscalConfig.financialCategories = sortConfigOptions(fiscalConfig.financialCategories || fiscalConfig.categories);
+  fiscalConfig.assetTypes = sortConfigOptions(fiscalConfig.assetTypes || assetTypeOptions);
+};
+normalizeFiscalConfigLists();
 const configuredHolders = () => configList(fiscalConfig.holders, holderOptions);
 const configuredInvoiceStatuses = () => configList(fiscalConfig.invoiceStatuses, invoiceStatusOptions);
 const configuredPaymentConditions = () => configList(fiscalConfig.paymentConditions, paymentConditionOptions);
 const configuredPaymentMethods = () => configList(fiscalConfig.paymentMethods, paymentMethodOptions);
 const configuredOperationTypes = () => configList(fiscalConfig.operationTypes, operationTypeOptions);
+const configuredAssetTypes = () => configList(fiscalConfig.assetTypes, assetTypeOptions);
 const findProductForItem = (products: ProductItem[], item?: InvoiceItem) => {
   if (!item) return undefined;
   if (item.productId) {
@@ -213,25 +238,24 @@ const findProductForItem = (products: ProductItem[], item?: InvoiceItem) => {
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
   closedPeriods: { ...(fiscalConfig.closedPeriods || {}) },
-  cfops: [...fiscalConfig.cfops],
+  cfops: sortConfigOptions(fiscalConfig.cfops),
   cfopRules: { ...(fiscalConfig.cfopRules || {}) },
-  csts: [...fiscalConfig.csts],
+  csts: sortConfigOptions(fiscalConfig.csts),
   invoiceStatuses: [...configuredInvoiceStatuses()],
-  categories: [...fiscalConfig.categories],
-  costCenters: [...fiscalConfig.costCenters],
+  categories: sortConfigOptions(fiscalConfig.categories),
+  costCenters: sortConfigOptions(fiscalConfig.costCenters),
   operationTypes: [...configuredOperationTypes()],
-  linkedTypes: [...fiscalConfig.linkedTypes],
-  units: [...(fiscalConfig.units || unitOptions)],
+  linkedTypes: sortConfigOptions(fiscalConfig.linkedTypes),
+  units: sortConfigOptions(fiscalConfig.units || unitOptions),
   paymentConditions: [...configList(fiscalConfig.paymentConditions, paymentConditionOptions)],
   paymentMethods: [...configList(fiscalConfig.paymentMethods, paymentMethodOptions)],
   holders: [...configList(fiscalConfig.holders, holderOptions)],
   financialCategories: [...configList(fiscalConfig.financialCategories, fiscalConfig.categories || [])],
+  assetTypes: [...configuredAssetTypes()],
 });
 
 const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
-  const replaceList = (current: string[], incoming?: string[]) => incoming
-    ? Array.from(new Set(incoming))
-    : [...current];
+  const replaceList = (current: string[], incoming?: string[]) => sortConfigOptions(incoming || current);
   fiscalConfig.icmsRate = Number(nextConfig.icmsRate ?? fiscalConfig.icmsRate);
   fiscalConfig.pisRate = Number(nextConfig.pisRate ?? fiscalConfig.pisRate);
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
@@ -241,9 +265,7 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cfops = replaceList(fiscalConfig.cfops, nextConfig.cfops);
   fiscalConfig.cfopRules = nextConfig.cfopRules ? { ...nextConfig.cfopRules } : { ...(fiscalConfig.cfopRules || {}) };
   fiscalConfig.csts = replaceList(fiscalConfig.csts, nextConfig.csts);
-  fiscalConfig.invoiceStatuses = nextConfig.invoiceStatuses
-    ? Array.from(new Set(nextConfig.invoiceStatuses))
-    : [...configuredInvoiceStatuses()];
+  fiscalConfig.invoiceStatuses = sortConfigOptions(nextConfig.invoiceStatuses || configuredInvoiceStatuses());
   fiscalConfig.categories = replaceList(fiscalConfig.categories, nextConfig.categories);
   fiscalConfig.costCenters = replaceList(fiscalConfig.costCenters, nextConfig.costCenters);
   fiscalConfig.operationTypes = replaceList(fiscalConfig.operationTypes || operationTypeOptions, nextConfig.operationTypes);
@@ -253,6 +275,8 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.paymentMethods = replaceList(fiscalConfig.paymentMethods || paymentMethodOptions, nextConfig.paymentMethods);
   fiscalConfig.holders = replaceList(fiscalConfig.holders || holderOptions, nextConfig.holders);
   fiscalConfig.financialCategories = replaceList(fiscalConfig.financialCategories || fiscalConfig.categories, nextConfig.financialCategories);
+  fiscalConfig.assetTypes = replaceList(fiscalConfig.assetTypes || assetTypeOptions, nextConfig.assetTypes);
+  normalizeFiscalConfigLists();
 };
 
 const saveFiscalConfig = async () => {
@@ -518,6 +542,9 @@ const isPeriodClosed = (period: string) => Boolean(period && fiscalConfig.closed
 const hasInvoiceCostCenter = (invoice: Invoice) =>
   Boolean(invoice.costCenter || invoice.items?.some((item) => item.costCenter));
 const cfopIsConfigured = (invoice: Invoice) => {
+  if (invoice.natureOperation === "Fatura" || invoice.natureOperation === "Recibo") {
+    return normalizeSearch(invoice.mainCfop) === "fatura";
+  }
   const code = getCfopCode(invoice.mainCfop);
   return Boolean(code && (fiscalConfig.cfopRules?.[code] || fiscalConfig.cfops.some((cfop) => getCfopCode(cfop) === code)));
 };
@@ -2126,11 +2153,21 @@ function InvoiceList({
   const [dateStart, setDateStart] = useSessionState(`invoice-list:${type}:date-start`, "");
   const [dateEnd, setDateEnd] = useSessionState(`invoice-list:${type}:date-end`, "");
   const [linkedOnly, setLinkedOnly] = useSessionState(`invoice-list:${type}:linked-only`, false);
+  const effectiveCfop = type === "received" && cfop === "NFS-e" ? "" : cfop;
+  const cfopOptions = fiscalConfig.cfops.filter(
+    (option) => type !== "received" || !/^NFS-e\s*-\s*Serviço tomado$/i.test(option.trim()),
+  );
   const filtered = invoices
     .filter((invoice) => invoice.invoiceType === type)
     .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
     .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd))
-    .filter((invoice) => (!cfop ? true : invoice.mainCfop === cfop))
+    .filter((invoice) => (
+      !effectiveCfop
+        ? true
+        : effectiveCfop === "__fatura__"
+          ? isBillInvoice(invoice)
+          : invoice.mainCfop === effectiveCfop
+    ))
     .filter((invoice) => (!linkedOnly ? true : invoice.hasLinkedOperation));
 
   return (
@@ -2151,9 +2188,10 @@ function InvoiceList({
           </label>
           <label className="field">
             <span>CFOP</span>
-            <select value={cfop} onChange={(event) => setCfop(event.target.value)}>
+            <select value={effectiveCfop} onChange={(event) => setCfop(event.target.value)}>
               <option value="">Todos</option>
-              {fiscalConfig.cfops.map((option) => (
+              {type === "received" && <option value="__fatura__">Fatura</option>}
+              {cfopOptions.map((option) => (
                 <option key={option} value={option.split(" - ")[0]}>
                   {option}
                 </option>
@@ -2311,6 +2349,7 @@ function InvoiceForm({
 
   useEffect(() => {
     if ((documentModel === "NFS-e" || documentModel === "CT-e") && !editingInvoice?.hasLinkedOperation) setLinked(false);
+    if (documentModel === "NFS-e" && !selectedMainCfop) setSelectedMainCfop("1933");
     if (documentModel === "CT-e" && !selectedMainCfop) setSelectedMainCfop("1353");
     setItemTotals((current) => ({
       ...current,
@@ -2326,8 +2365,9 @@ function InvoiceForm({
 
   const changeDocumentModel = (nextModel: ReceivedDocumentModel) => {
     setDocumentModel(nextModel);
+    if (nextModel === "NFS-e") setSelectedMainCfop("1933");
     if (nextModel === "CT-e") setSelectedMainCfop("1353");
-    if (nextModel === "NF-e" && (selectedMainCfop === "NFS-e" || selectedMainCfop === "1353")) {
+    if (nextModel === "NF-e" && (selectedMainCfop === "NFS-e" || selectedMainCfop === "1933" || selectedMainCfop === "1353")) {
       setSelectedMainCfop("");
     }
   };
@@ -2503,7 +2543,7 @@ function InvoiceForm({
     const form = new FormData(event.currentTarget);
     const currentDocumentModel = String(form.get("documentModel") || documentModel);
     let mainCfop = String(form.get("mainCfop") || "");
-    if (currentDocumentModel === "NFS-e") mainCfop = "NFS-e";
+    if (currentDocumentModel === "NFS-e" && !mainCfop) mainCfop = "1933";
     const rawTotalProducts = itemIndexes.reduce((total, index) => {
       const suffix = `_${index}`;
       const quantity = cleanNumber(form.get(`quantity${suffix}`));
@@ -2582,7 +2622,7 @@ function InvoiceForm({
       operationType: String(
         form.get("operationType") ||
           (currentDocumentModel === "NFS-e"
-            ? "Serviço tomado"
+            ? "Aquisição de serviço"
             : currentDocumentModel === "CT-e"
               ? "Conhecimento de frete"
               : isReceived
@@ -2749,10 +2789,10 @@ function InvoiceForm({
           <ReadOnlyField label="UF" name="state" value={selectedParty?.state || editingInvoice?.state} />
           <input name="partyName" type="hidden" value={selectedParty?.name || editingInvoice?.partyName || ""} readOnly />
           <label className="field">
-            <span>{isServiceReceived ? "Regra fiscal de custo" : "CFOP principal"}</span>
+            <span>CFOP principal</span>
             <select
               name="mainCfop"
-              value={isServiceReceived ? "NFS-e" : selectedMainCfop}
+              value={selectedMainCfop}
               onChange={(event) => setSelectedMainCfop(event.target.value)}
               required
             >
@@ -2765,10 +2805,14 @@ function InvoiceForm({
             </select>
           </label>
           <Field
+            key={documentModel}
             label="Tipo de operação"
             name="operationType"
             options={Array.from(new Set([...(editingInvoice?.operationType ? [editingInvoice.operationType] : []), ...configuredOperationTypes()]))}
-            defaultValue={editingInvoice?.operationType || configuredOperationTypes()[0] || ""}
+            defaultValue={
+              editingInvoice?.operationType ||
+              (isServiceReceived ? "Aquisição de serviço" : isFreightDocument ? "Conhecimento de frete" : configuredOperationTypes()[0] || "")
+            }
           />
           <label className="field">
             <span>Status</span>
@@ -2840,13 +2884,13 @@ function InvoiceForm({
                     <ReadOnlyField label="Descrição do produto/serviço" name={`description_${itemIndex}`} value={selectedProduct?.name || existingItem?.description || ""} />
                     <input name={`itemCode_${itemIndex}`} type="hidden" value={selectedProduct?.code || existingItem?.itemCode || ""} readOnly />
                     <input name={`category_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCategory || existingItem?.category || ""} readOnly />
-                    <input name={`costCenter_${itemIndex}`} type="hidden" value={selectedProduct?.defaultCostCenter || existingItem?.costCenter || ""} readOnly />
+                    <input name={`costCenter_${itemIndex}`} type="hidden" value={existingItem?.costCenter || ""} readOnly />
                   </>
                 ) : (
                   <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="productName" />
                 )}
                 {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
-                {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || selectedProduct?.defaultCostCenter || ""} />}
+                {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || ""} />}
                 {!isNonProductDocument && (
                   <>
                     <Field label="NCM" name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
@@ -4966,7 +5010,7 @@ function BillFormView({
       city: selectedParty?.city || "",
       state: selectedParty?.state || "RS",
       natureOperation: currentSeries,
-      mainCfop: "FATURA",
+      mainCfop: "Fatura",
       purpose: "Normal",
       paymentCondition: firstInstallment?.paymentCondition || "",
       paymentMethod: firstInstallment?.paymentMethod || "",
@@ -5008,7 +5052,7 @@ function BillFormView({
           category: "Fatura",
           costCenter,
           ncm: "",
-          cfop: "FATURA",
+          cfop: "Fatura",
           cstIcms: "",
           unit: "SV",
           quantity: 1,
@@ -5516,7 +5560,6 @@ function FinancePie({ title, data }: { title: string; data: Array<{ name: string
   );
 }
 
-const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
 const assetTypesWithPlate = new Set(["Máquinas", "Caminhões", "Veículos"]);
 
 function AssetsView({
@@ -5536,9 +5579,10 @@ function AssetsView({
   const [selectedSituation, setSelectedSituation] = useState<AssetItem["situation"]>("Próprio");
   const visibleAssets = assets.filter((asset) => !asset.archived && asset.situation !== "Vendido");
   const soldAssets = assets.filter((asset) => asset.archived || asset.situation === "Vendido");
-  const groupedAssets = assetTypeOptions.map((type) => ({
+  const availableAssetTypes = configuredAssetTypes();
+  const groupedAssets = [...availableAssetTypes, ...(visibleAssets.some((asset) => !asset.itemType) ? ["Sem tipo"] : [])].map((type) => ({
     type,
-    items: visibleAssets.filter((asset) => asset.itemType === type),
+    items: visibleAssets.filter((asset) => type === "Sem tipo" ? !asset.itemType : asset.itemType === type),
   }));
 
   function openNew() {
@@ -5665,7 +5709,7 @@ function AssetsView({
                 required
               >
                 <option value="">Selecione</option>
-                {assetTypeOptions.map((option) => (
+                {availableAssetTypes.map((option) => (
                   <option key={option}>{option}</option>
                 ))}
               </select>
@@ -6168,7 +6212,6 @@ function ProductsView({
     product.code,
     product.name,
     product.ncm,
-    product.defaultCostCenter,
     product.defaultUnit,
     product.active ? "ativo" : "arquivado",
   ].join(" "), searchQuery)), [products, searchQuery]);
@@ -6187,7 +6230,7 @@ function ProductsView({
           code: String(item.itemCode || "").trim(),
           name,
           ncm,
-          defaultCostCenter: item.costCenter || "",
+          defaultCostCenter: "",
           defaultCategory: item.category || "",
           defaultUnit: item.unit || "UN",
           accountingAccount: "",
@@ -6226,7 +6269,7 @@ function ProductsView({
       name: String(form.get("name") || "").trim(),
       code: String(form.get("code") || "").trim(),
       ncm: onlyDigits(String(form.get("ncm") || "")),
-      defaultCostCenter: String(form.get("defaultCostCenter") || ""),
+      defaultCostCenter: "",
       defaultCategory: editingProduct?.defaultCategory || "",
       defaultUnit: String(form.get("defaultUnit") || "UN"),
       accountingAccount: "",
@@ -6275,7 +6318,6 @@ function ProductsView({
             <Field label="Código do produto" name="code" defaultValue={editingProduct?.code || ""} />
             <Field label="Nome do produto" name="name" defaultValue={editingProduct?.name || ""} required sanitize="productName" />
             <Field label="NCM" name="ncm" defaultValue={editingProduct?.ncm || ""} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
-            <Field label="Centro de custo padrão" name="defaultCostCenter" options={fiscalConfig.costCenters} defaultValue={editingProduct?.defaultCostCenter || ""} />
             <Field label="Unidade padrão" name="defaultUnit" options={fiscalConfig.units || unitOptions} defaultValue={editingProduct?.defaultUnit || "UN"} />
             </fieldset>
             <div className="form-actions inline">
@@ -6312,7 +6354,7 @@ function ProductsView({
             <input
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Código, produto, NCM, centro de custo..."
+              placeholder="Código, produto, NCM ou unidade..."
             />
           </div>
         </label>
@@ -6323,7 +6365,6 @@ function ProductsView({
                 <th>Código do produto</th>
                 <th>Produto</th>
                 <th>NCM</th>
-                <th>Centro de custo padrão</th>
                 <th>Unidade</th>
                 <th>Ativo</th>
                 <th>Ações</th>
@@ -6335,7 +6376,6 @@ function ProductsView({
                   <td>{product.code}</td>
                   <td>{product.name}</td>
                   <td>{product.ncm}</td>
-                  <td>{product.defaultCostCenter}</td>
                   <td>{product.defaultUnit}</td>
                   <td>{product.active ? "Sim" : "Não"}</td>
                   <td>
@@ -6358,7 +6398,7 @@ function ProductsView({
               ))}
               {!filteredProducts.length && (
                 <tr>
-                  <td colSpan={7}>Nenhum produto encontrado.</td>
+                  <td colSpan={6}>Nenhum produto encontrado.</td>
                 </tr>
               )}
             </tbody>
@@ -6418,37 +6458,46 @@ function SettingsView({
       if (!fiscalConfig.financialCategories) fiscalConfig.financialCategories = [...fiscalConfig.categories];
       return fiscalConfig.financialCategories;
     }
+    if (listName === "assetTypes") {
+      if (!fiscalConfig.assetTypes) fiscalConfig.assetTypes = [...assetTypeOptions];
+      return fiscalConfig.assetTypes;
+    }
 
     return fiscalConfig[listName];
   }
 
   function setConfigList(listName: FiscalConfigListName, list: string[]) {
+    const sortedList = sortConfigOptions(list);
     if (listName === "invoiceStatuses") {
-      fiscalConfig.invoiceStatuses = list;
+      fiscalConfig.invoiceStatuses = sortedList;
       return;
     }
     if (listName === "units") {
-      fiscalConfig.units = list;
+      fiscalConfig.units = sortedList;
       return;
     }
     if (listName === "paymentConditions") {
-      fiscalConfig.paymentConditions = list;
+      fiscalConfig.paymentConditions = sortedList;
       return;
     }
     if (listName === "paymentMethods") {
-      fiscalConfig.paymentMethods = list;
+      fiscalConfig.paymentMethods = sortedList;
       return;
     }
     if (listName === "holders") {
-      fiscalConfig.holders = list;
+      fiscalConfig.holders = sortedList;
       return;
     }
     if (listName === "financialCategories") {
-      fiscalConfig.financialCategories = list;
+      fiscalConfig.financialCategories = sortedList;
+      return;
+    }
+    if (listName === "assetTypes") {
+      fiscalConfig.assetTypes = sortedList;
       return;
     }
 
-    fiscalConfig[listName] = list;
+    fiscalConfig[listName] = sortedList;
   }
 
   function applyCfopRule(itemValue: string, previousValue?: string) {
@@ -6593,6 +6642,7 @@ function SettingsView({
                   <option value="paymentMethods">Meio de pagamento</option>
                   <option value="holders">Portador</option>
                   <option value="financialCategories">Categoria financeira</option>
+                  <option value="assetTypes">Módulo patrimonial</option>
                 </select>
               </label>
               <label className="field">
@@ -6654,6 +6704,7 @@ function SettingsView({
             ["paymentMethods", "Meios de pagamento", configSnapshot.paymentMethods || paymentMethodOptions],
             ["holders", "Portadores", configSnapshot.holders || holderOptions],
             ["financialCategories", "Categorias financeiras", configSnapshot.financialCategories || fiscalConfig.categories],
+            ["assetTypes", "Módulo patrimonial", configSnapshot.assetTypes || assetTypeOptions],
           ] as Array<[FiscalConfigListName, string, string[]]>).map(([listName, title, list]) => (
             <section className="settings-list-group" key={listName}>
               <h3>{title}</h3>
