@@ -566,7 +566,11 @@ const invoiceNeedsLink = (invoice: Invoice) => {
 const invoiceHasLinkReference = (invoice: Invoice) =>
   Boolean(invoice.linkedInvoiceNumber || invoice.hasLinkedOperation || invoice.finalRecipientName || invoice.physicalReceiverName);
 const invoiceHasHolder = (invoice: Invoice) => invoiceInstallments(invoice).every((installment) => Boolean(installment.holder));
-const isBillInvoice = (invoice: Invoice) => invoice.natureOperation === "Fatura" || invoice.natureOperation === "Recibo";
+const isBillInvoice = (invoice: Invoice) => {
+  const nature = normalizeSearch(invoice.natureOperation);
+  const mainCfop = normalizeSearch(invoice.mainCfop);
+  return nature === "fatura" || nature === "recibo" || mainCfop === "fatura";
+};
 const billFinancialKind = (invoice: Invoice): "receivable" | "payable" | null => {
   if (!isBillInvoice(invoice)) return null;
   if (/receber/i.test(invoice.operationType)) return "receivable";
@@ -815,6 +819,7 @@ function makeItem(
 }
 
 function Badge({ value, tone }: { value: string; tone?: "good" | "info" | "warn" | "danger" }) {
+  const normalizedValue = normalizeSearch(value);
   const kind = tone === "good"
     ? "ok"
     : tone === "info"
@@ -823,12 +828,12 @@ function Badge({ value, tone }: { value: string; tone?: "good" | "info" | "warn"
         ? "danger"
         : tone === "warn"
           ? "warn"
-          : value.includes("Cancelada")
-    || value.includes("Devolvido")
+          : normalizedValue.includes("cancelad")
+    || normalizedValue.includes("devolvid")
     ? "danger"
-          : value === "Em conferência"
+          : normalizedValue.includes("conferencia")
             ? "review"
-            : value.includes("Pendente") || value.includes("Aberta")
+            : normalizedValue.includes("pendente") || normalizedValue.includes("abert")
       ? "warn"
       : "ok";
   return <span className={`badge ${kind}`}>{value}</span>;
@@ -4899,7 +4904,7 @@ function BillsView({
                   <td>{formatDate(invoice.issueDate)}</td>
                   <td>{formatDate(invoice.dueDate)}</td>
                   <td>{formatCurrency(invoiceFinancialAmount(invoice))}</td>
-                  <td><Badge value={invoice.paid ? "Paga" : "Em aberto"} /></td>
+                  <td><Badge value={invoice.status || "Em conferência"} /></td>
                   <td>
                     <button className="icon-btn" type="button" title="Visualizar fatura" onClick={() => onEdit(invoice)}>
                       <Search size={15} />
@@ -5026,7 +5031,7 @@ function BillFormView({
       carrierName: "",
       paymentDate: editingBill?.paymentDate || "",
       paid: Boolean(editingBill?.paid),
-      status: "Faturada",
+      status: String(form.get("status") || editingBill?.status || "Faturada") as Invoice["status"],
       category,
       costCenter,
       totalProducts: amount,
@@ -5121,6 +5126,17 @@ function BillFormView({
             </label>
             <Field label="Título" name="title" defaultValue={editingBill?.invoiceNumber || ""} required />
             <Field label="Data de emissão" name="issueDate" type="date" defaultValue={editingBill?.issueDate || todayIso()} required />
+            <label className="field">
+              <span>Status</span>
+              <select name="status" defaultValue={editingBill?.status || "Faturada"} required>
+                {editingBill?.status && !configuredInvoiceStatuses().includes(editingBill.status) && (
+                  <option value={editingBill.status}>{editingBill.status}</option>
+                )}
+                {configuredInvoiceStatuses().map((status) => (
+                  <option key={status} value={status}>{status}</option>
+                ))}
+              </select>
+            </label>
             <PartySelect
               label={entryType === "payable" ? "Fornecedor" : "Cliente"}
               name="partyId"
@@ -7133,7 +7149,7 @@ export default function App() {
   const openInvoiceForm = (invoice: Invoice) => {
     setEditingInvoice(invoice);
     setRecordMode("view");
-    setView(invoice.invoiceType === "issued" ? "new-issued" : "new-received");
+    setView(isBillInvoice(invoice) ? "new-bill" : invoice.invoiceType === "issued" ? "new-issued" : "new-received");
   };
   const openNewInvoice = (nextView: View) => {
     setEditingInvoice(null);
