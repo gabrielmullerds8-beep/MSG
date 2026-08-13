@@ -414,6 +414,12 @@ const cleanNumber = (value: FormDataEntryValue | null) => {
   return Number(normalized) || 0;
 };
 
+const formatQuantityInput = (value: FormDataEntryValue | number | null | undefined) =>
+  new Intl.NumberFormat("pt-BR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 6,
+  }).format(cleanNumber(String(value ?? "0")));
+
 const chartValue = (value: number) => (Number.isFinite(value) ? Math.max(value, 0) : 0);
 const chartLabel = (value: string, max = 26) => {
   const text = String(value || "Sem dados").trim();
@@ -989,12 +995,13 @@ function Field({
   inputMode?: "text" | "decimal" | "numeric";
   pattern?: string;
   maxLength?: number;
-  sanitize?: "letters" | "productName" | "digits" | "kg" | "cpfCnpj";
+  sanitize?: "letters" | "productName" | "digits" | "decimal" | "kg" | "cpfCnpj";
 }) {
   const sanitizeValue = (value: string) => {
     if (sanitize === "letters") return value.replace(/[^A-Za-zÀ-ÿ\s]/g, "");
     if (sanitize === "productName") return value.replace(/[^A-Za-zÀ-ÿ0-9\s.,\/()=+\\|%$&*_\-]/g, "");
     if (sanitize === "digits") return value.replace(/\D/g, "");
+    if (sanitize === "decimal") return value.replace(/[^\d.,]/g, "");
     if (sanitize === "kg") return value.replace(/[^\d.,]/g, "");
     if (sanitize === "cpfCnpj") return formatCpfCnpj(value);
     return value;
@@ -1026,6 +1033,11 @@ function Field({
             if (!sanitize) return;
             const input = event.currentTarget;
             input.value = sanitizeValue(input.value);
+          }}
+          onBlur={(event) => {
+            if (sanitize === "decimal") {
+              event.currentTarget.value = formatQuantityInput(event.currentTarget.value);
+            }
           }}
         />
       )}
@@ -2948,7 +2960,7 @@ function InvoiceForm({
                   />
                 )}
                 <div className="subsection-label">Valores</div>
-                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={onlyDigits(existingItem?.quantity || "1")} inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
+                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={formatQuantityInput(existingItem?.quantity || "1")} inputMode="decimal" sanitize="decimal" />
                 <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />

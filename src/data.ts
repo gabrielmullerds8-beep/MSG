@@ -124,11 +124,18 @@ export const getCfopRule = (cfop: string): CfopRule => {
   return fiscalConfig.cfopRules?.[code] || {};
 };
 
+const isCancelledInvoice = (invoice: Invoice) =>
+  String(invoice.status || "").trim().toLocaleLowerCase("pt-BR") === "cancelada";
+
 export const invoiceConsidersSale = (invoice: Invoice) =>
-  invoice.invoiceType === "issued" && Boolean(getCfopRule(invoice.mainCfop).considerSale);
+  invoice.invoiceType === "issued" &&
+  !isCancelledInvoice(invoice) &&
+  Boolean(getCfopRule(invoice.mainCfop).considerSale);
 
 export const invoiceConsidersCost = (invoice: Invoice) =>
-  invoice.invoiceType === "received" && Boolean(getCfopRule(invoice.mainCfop).considerCost);
+  invoice.invoiceType === "received" &&
+  !isCancelledInvoice(invoice) &&
+  Boolean(getCfopRule(invoice.mainCfop).considerCost);
 
 export const invoiceHasFinancialEffect = (invoice: Invoice) =>
   invoiceConsidersSale(invoice) || invoiceConsidersCost(invoice);
