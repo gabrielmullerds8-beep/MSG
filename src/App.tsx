@@ -414,11 +414,24 @@ const cleanNumber = (value: FormDataEntryValue | null) => {
   return Number(normalized) || 0;
 };
 
+const cleanQuantity = (value: FormDataEntryValue | number | null | undefined) => {
+  const raw = String(value ?? "0").trim().replace(/\s/g, "").replace(/[^\d,.-]/g, "");
+  if (!raw) return 0;
+
+  // Quantidades usam ponto ou vírgula como separador decimal. O ponto só é
+  // tratado como milhar quando também existe uma vírgula decimal.
+  const normalized = raw.includes(",")
+    ? raw.replace(/\./g, "").replace(",", ".")
+    : raw;
+
+  return Number(normalized) || 0;
+};
+
 const formatQuantityInput = (value: FormDataEntryValue | number | null | undefined) =>
   new Intl.NumberFormat("pt-BR", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 6,
-  }).format(cleanNumber(String(value ?? "0")));
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  }).format(cleanQuantity(value));
 
 const chartValue = (value: number) => (Number.isFinite(value) ? Math.max(value, 0) : 0);
 const chartLabel = (value: string, max = 26) => {
@@ -746,7 +759,7 @@ function makeItem(
   const isServiceDocument = invoiceType === "received" && documentModel === "NFS-e";
   const isFreightDocument = invoiceType === "received" && documentModel === "CT-e";
   const isNonProductDocument = isServiceDocument || isFreightDocument;
-  const quantity = cleanNumber(form.get(`quantity${suffix}`));
+  const quantity = cleanQuantity(form.get(`quantity${suffix}`));
   const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
   const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
@@ -2439,7 +2452,7 @@ function InvoiceForm({
 
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
-      const quantity = cleanNumber(formData.get(`quantity${suffix}`));
+      const quantity = cleanQuantity(formData.get(`quantity${suffix}`));
       const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
       const unitValue = cleanNumber(unitValueField?.value || null);
@@ -2459,7 +2472,7 @@ function InvoiceForm({
 
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
-      const quantity = cleanNumber(formData.get(`quantity${suffix}`));
+      const quantity = cleanQuantity(formData.get(`quantity${suffix}`));
       const unitValueField = form.elements.namedItem(`unitValue${suffix}`) as HTMLInputElement | null;
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
       const discountValueField = form.elements.namedItem(`discountValue${suffix}`) as HTMLInputElement | null;
@@ -2597,7 +2610,7 @@ function InvoiceForm({
     if (currentDocumentModel === "NFS-e" && !mainCfop) mainCfop = "1933";
     const rawTotalProducts = itemIndexes.reduce((total, index) => {
       const suffix = `_${index}`;
-      const quantity = cleanNumber(form.get(`quantity${suffix}`));
+      const quantity = cleanQuantity(form.get(`quantity${suffix}`));
       const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
       return total + (cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue);
     }, 0);
@@ -2960,7 +2973,7 @@ function InvoiceForm({
                   />
                 )}
                 <div className="subsection-label">Valores</div>
-                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={formatQuantityInput(existingItem?.quantity || "1")} inputMode="decimal" sanitize="decimal" />
+                <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={formatQuantityInput(existingItem?.quantity ?? "1")} inputMode="decimal" sanitize="decimal" />
                 <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
