@@ -2399,7 +2399,7 @@ function InvoiceForm({
         ? "NFS-e"
         : "NF-e",
   );
-  const [selectedMainCfop, setSelectedMainCfop] = useState(editingInvoice?.mainCfop || "");
+  const [selectedMainCfop, setSelectedMainCfop] = useState(() => getCfopCode(editingInvoice?.mainCfop || ""));
   const isServiceReceived = isReceived && documentModel === "NFS-e";
   const isFreightDocument = isReceived && documentModel === "CT-e";
   const isNonProductDocument = isServiceReceived || isFreightDocument;
@@ -2922,7 +2922,11 @@ function InvoiceForm({
             <select
               name="mainCfop"
               value={selectedMainCfop}
-              onChange={(event) => setSelectedMainCfop(event.target.value)}
+              onInput={(event) => {
+                event.stopPropagation();
+                setSelectedMainCfop(event.currentTarget.value);
+              }}
+              onChange={(event) => setSelectedMainCfop(event.currentTarget.value)}
               required
             >
               <option value="">Selecione</option>
