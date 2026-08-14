@@ -464,7 +464,7 @@ const formatUnitValueInput = (value: FormDataEntryValue | number | null | undefi
 
 const formatPercentInput = (value: string) => {
   const amount = cleanNumber(value);
-  return `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount)} %`;
+  return `${new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(amount)} %`;
 };
 
 const formatKgInput = (value: string) => {
@@ -769,7 +769,6 @@ function makeItem(
   invoiceType: InvoiceType,
   index: number,
   mainCfop: string,
-  noteTaxBaseOverride?: number,
   documentModel: ReceivedDocumentModel = "NF-e",
 ): InvoiceItem {
   const suffix = `_${index}`;
@@ -782,7 +781,7 @@ function makeItem(
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
   const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
   const freightValue = isNonProductDocument ? 0 : cleanNumber(form.get(`itemFreightValue${suffix}`));
-  const taxBase = noteTaxBaseOverride !== undefined ? noteTaxBaseOverride : cleanNumber(form.get(`taxBase${suffix}`)) || totalValue;
+  const itemTaxBase = totalValue;
   const icmsEnabled = form.get(`icmsEnabled${suffix}`) === "on";
   const pisEnabled = form.get(`pisEnabled${suffix}`) === "on";
   const cofinsEnabled = form.get(`cofinsEnabled${suffix}`) === "on";
@@ -791,25 +790,25 @@ function makeItem(
   const cbsEnabled = form.get(`cbsEnabled${suffix}`) === "on";
   const issqnEnabled = !isFreightDocument && form.get(`issqnEnabled${suffix}`) === "on";
   const icmsRate = icmsEnabled ? cleanNumber(form.get(`icmsRate${suffix}`)) : 0;
-  const icmsBase = icmsEnabled ? taxBase : 0;
+  const icmsBase = icmsEnabled ? cleanNumber(form.get(`icmsBase${suffix}`)) || itemTaxBase : 0;
   const icmsValue = icmsEnabled ? cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100 : 0;
-  const pisBase = pisEnabled ? taxBase : 0;
+  const pisBase = pisEnabled ? cleanNumber(form.get(`pisBase${suffix}`)) || itemTaxBase : 0;
   const pisRate = pisEnabled ? cleanNumber(form.get(`pisRate${suffix}`)) : 0;
   const pisValue = pisEnabled ? cleanNumber(form.get(`pisValue${suffix}`)) || (pisBase * pisRate) / 100 : 0;
-  const cofinsBase = cofinsEnabled ? taxBase : 0;
+  const cofinsBase = cofinsEnabled ? cleanNumber(form.get(`cofinsBase${suffix}`)) || itemTaxBase : 0;
   const cofinsRate = cofinsEnabled ? cleanNumber(form.get(`cofinsRate${suffix}`)) : 0;
   const cofinsValue = cofinsEnabled ? cleanNumber(form.get(`cofinsValue${suffix}`)) || (cofinsBase * cofinsRate) / 100 : 0;
   const ipiRate = ipiEnabled ? cleanNumber(form.get(`ipiRate${suffix}`)) : 0;
-  const ipiBase = ipiEnabled ? taxBase : 0;
+  const ipiBase = ipiEnabled ? cleanNumber(form.get(`ipiBase${suffix}`)) || itemTaxBase : 0;
   const ipiValue = ipiEnabled ? cleanNumber(form.get(`ipiValue${suffix}`)) || (ipiBase * ipiRate) / 100 : 0;
   const ibsRate = ibsEnabled ? cleanNumber(form.get(`ibsRate${suffix}`)) : 0;
-  const ibsBase = ibsEnabled ? taxBase : 0;
+  const ibsBase = ibsEnabled ? cleanNumber(form.get(`ibsBase${suffix}`)) || itemTaxBase : 0;
   const ibsValue = ibsEnabled ? cleanNumber(form.get(`ibsValue${suffix}`)) || (ibsBase * ibsRate) / 100 : 0;
   const cbsRate = cbsEnabled ? cleanNumber(form.get(`cbsRate${suffix}`)) : 0;
-  const cbsBase = cbsEnabled ? taxBase : 0;
+  const cbsBase = cbsEnabled ? cleanNumber(form.get(`cbsBase${suffix}`)) || itemTaxBase : 0;
   const cbsValue = cbsEnabled ? cleanNumber(form.get(`cbsValue${suffix}`)) || (cbsBase * cbsRate) / 100 : 0;
   const issqnRate = issqnEnabled ? cleanNumber(form.get(`issqnRate${suffix}`)) : 0;
-  const issqnBase = issqnEnabled ? taxBase : 0;
+  const issqnBase = issqnEnabled ? cleanNumber(form.get(`issqnBase${suffix}`)) || itemTaxBase : 0;
   const issqnValue = issqnEnabled ? cleanNumber(form.get(`issqnValue${suffix}`)) || (issqnBase * issqnRate) / 100 : 0;
   const cfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
 
@@ -1086,6 +1085,7 @@ function MoneyField({
   manualOverride,
   defaultManualOverride,
   maximumFractionDigits = 2,
+  linkedTaxRateName,
 }: {
   label: string;
   name: string;
@@ -1096,6 +1096,7 @@ function MoneyField({
   manualOverride?: boolean;
   defaultManualOverride?: boolean;
   maximumFractionDigits?: number;
+  linkedTaxRateName?: string;
 }) {
   return (
     <label className="field">
@@ -1110,6 +1111,11 @@ function MoneyField({
         data-user-edited={defaultManualOverride ? "true" : undefined}
         onInput={(event) => {
           if (manualOverride) event.currentTarget.dataset.userEdited = "true";
+          if (linkedTaxRateName) {
+            event.currentTarget.dataset.taxDriver = "value";
+            const rateField = event.currentTarget.form?.elements.namedItem(linkedTaxRateName) as HTMLInputElement | null;
+            if (rateField) rateField.dataset.taxDriver = "value";
+          }
         }}
         onChange={(event) => onChangeValue?.(event.currentTarget.value)}
         onBlur={(event) => {
@@ -1122,15 +1128,35 @@ function MoneyField({
   );
 }
 
-function PercentField({ label, name, defaultValue = "0,00 %" }: { label: string; name: string; defaultValue?: string | number }) {
+function PercentField({
+  label,
+  name,
+  defaultValue = "0,00 %",
+  linkedTaxValueName,
+}: {
+  label: string;
+  name: string;
+  defaultValue?: string | number;
+  linkedTaxValueName?: string;
+}) {
   return (
     <label className="field">
       <span>{label}</span>
       <input
         name={name}
-        defaultValue={typeof defaultValue === "number" ? `${defaultValue.toFixed(2).replace(".", ",")} %` : defaultValue}
+        defaultValue={typeof defaultValue === "number" ? formatPercentInput(String(defaultValue)) : defaultValue}
         inputMode="decimal"
         data-percent="true"
+        onInput={(event) => {
+          event.currentTarget.dataset.taxDriver = "rate";
+          const valueField = linkedTaxValueName
+            ? event.currentTarget.form?.elements.namedItem(linkedTaxValueName) as HTMLInputElement | null
+            : null;
+          if (valueField) {
+            valueField.dataset.taxDriver = "rate";
+            delete valueField.dataset.userEdited;
+          }
+        }}
         onBlur={(event) => {
           event.currentTarget.value = formatPercentInput(event.currentTarget.value);
           event.currentTarget.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1156,6 +1182,7 @@ function TaxControl({
   retentionName,
   retentionDefault,
   retentionLabel = "Retenção do imposto",
+  automaticBaseValue = 0,
 }: {
   title: string;
   enabledName: string;
@@ -1172,8 +1199,11 @@ function TaxControl({
   retentionName?: string;
   retentionDefault?: boolean;
   retentionLabel?: string;
+  automaticBaseValue?: number;
 }) {
-  const preserveInitialBase = defaultChecked && cleanNumber(baseValue) !== 0;
+  const preserveInitialBase = defaultChecked
+    && cleanNumber(baseValue) !== 0
+    && Math.abs(cleanNumber(baseValue) - automaticBaseValue) > 0.005;
   const preserveInitialValue = defaultChecked && cleanNumber(valueValue) !== 0;
 
   return (
@@ -1205,7 +1235,12 @@ function TaxControl({
           manualOverride
           defaultManualOverride={preserveInitialBase}
         />
-        <PercentField label={`Alíquota ${title} %`} name={rateName} defaultValue={rateValue} />
+        <PercentField
+          label={`Alíquota ${title} %`}
+          name={rateName}
+          defaultValue={rateValue}
+          linkedTaxValueName={valueName}
+        />
         <MoneyField
           label={`Valor ${title}`}
           name={valueName}
@@ -1213,6 +1248,7 @@ function TaxControl({
           autoCalc
           manualOverride
           defaultManualOverride={preserveInitialValue}
+          linkedTaxRateName={rateName}
         />
         {showCredit && creditName && (
           <label className="check tax-credit">
@@ -2533,17 +2569,6 @@ function InvoiceForm({
       if (quantity && unitValue && totalValueField) totalValueField.value = formatCurrency(quantity * unitValue);
     });
 
-    const noteProducts = itemIndexes.reduce((total, itemIndex) => {
-      const suffix = `_${itemIndex}`;
-      const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
-      return total + cleanNumber(totalValueField?.value || formData.get(`totalValue${suffix}`));
-    }, 0);
-    const noteItemDiscounts = itemIndexes.reduce((total, itemIndex) => total + cleanNumber(formData.get(`discountValue_${itemIndex}`)), 0);
-    const noteItemFreight = itemIndexes.reduce((total, itemIndex) => total + cleanNumber(formData.get(`itemFreightValue_${itemIndex}`)), 0);
-    const noteFreight = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
-    const noteDiscount = cleanNumber(formData.get("discountValue"));
-    const noteTaxBase = Math.max(noteProducts + noteFreight - noteItemDiscounts - noteDiscount, 0);
-
     itemIndexes.forEach((itemIndex) => {
       const suffix = `_${itemIndex}`;
       const quantity = cleanQuantity(formData.get(`quantity${suffix}`));
@@ -2551,7 +2576,6 @@ function InvoiceForm({
       const totalValueField = form.elements.namedItem(`totalValue${suffix}`) as HTMLInputElement | null;
       const discountValueField = form.elements.namedItem(`discountValue${suffix}`) as HTMLInputElement | null;
       const itemFreightValueField = form.elements.namedItem(`itemFreightValue${suffix}`) as HTMLInputElement | null;
-      const taxBaseField = form.elements.namedItem(`taxBase${suffix}`) as HTMLInputElement | null;
       const icmsBaseField = form.elements.namedItem(`icmsBase${suffix}`) as HTMLInputElement | null;
       const icmsRateField = form.elements.namedItem(`icmsRate${suffix}`) as HTMLInputElement | null;
       const icmsValueField = form.elements.namedItem(`icmsValue${suffix}`) as HTMLInputElement | null;
@@ -2584,10 +2608,22 @@ function InvoiceForm({
         const valueWasEdited = valueField?.dataset.userEdited === "true";
         const base = enabled ? (baseWasEdited ? cleanNumber(baseField?.value || null) : taxBase) : 0;
         if (baseField && (!baseWasEdited || !enabled)) baseField.value = formatCurrency(base);
-        const rate = cleanNumber(rateField?.value || null);
-        const calculatedValue = enabled && base && rate ? (base * rate) / 100 : 0;
-        const value = enabled && valueWasEdited ? cleanNumber(valueField?.value || null) : calculatedValue;
-        if (valueField && (!valueWasEdited || !enabled)) valueField.value = formatCurrency(value);
+        const driver = valueField?.dataset.taxDriver || rateField?.dataset.taxDriver || (valueWasEdited ? "value" : "rate");
+        let rate = enabled ? cleanNumber(rateField?.value || null) : 0;
+        let value = enabled ? cleanNumber(valueField?.value || null) : 0;
+
+        if (enabled && driver === "value") {
+          rate = base > 0 ? (value / base) * 100 : 0;
+          if (rateField) rateField.value = formatPercentInput(String(rate));
+        } else {
+          value = enabled && base && rate ? (base * rate) / 100 : 0;
+          if (valueField) valueField.value = formatCurrency(value);
+        }
+
+        if (!enabled) {
+          if (rateField) rateField.value = formatPercentInput("0");
+          if (valueField) valueField.value = formatCurrency(0);
+        }
         return value;
       };
 
@@ -2598,8 +2634,7 @@ function InvoiceForm({
       products += totalValue;
       discounts += cleanNumber(discountValueField?.value || null);
       freightItems += cleanNumber(itemFreightValueField?.value || null);
-      const taxBase = noteTaxBase;
-      if (taxBaseField) taxBaseField.value = formatCurrency(taxBase);
+      const taxBase = totalValue;
       updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
       updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
       updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField);
@@ -2685,17 +2720,7 @@ function InvoiceForm({
     const currentDocumentModel = String(form.get("documentModel") || documentModel);
     let mainCfop = String(form.get("mainCfop") || "");
     if (currentDocumentModel === "NFS-e" && !mainCfop) mainCfop = "1933";
-    const rawTotalProducts = itemIndexes.reduce((total, index) => {
-      const suffix = `_${index}`;
-      const quantity = cleanQuantity(form.get(`quantity${suffix}`));
-      const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
-      return total + (cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue);
-    }, 0);
-    const rawItemDiscounts = itemIndexes.reduce((total, index) => total + cleanNumber(form.get(`discountValue_${index}`)), 0);
-    const rawFreightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
-    const rawDiscountValue = cleanNumber(form.get("discountValue"));
-    const noteTaxBase = Math.max(rawTotalProducts + rawFreightValue - rawItemDiscounts - rawDiscountValue, 0);
-    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, noteTaxBase, currentDocumentModel as ReceivedDocumentModel));
+    const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, currentDocumentModel as ReceivedDocumentModel));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
     const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
@@ -3004,7 +3029,31 @@ function InvoiceForm({
             const selectedProductId = selectedProducts[itemIndex] || existingItem?.productId || findProductForItem(products, existingItem)?.id || "";
             const selectedProduct = products.find((product) => product.id === selectedProductId);
             const taxIsEnabled = (base?: number, value?: number, rate?: number) => Boolean(Number(base || 0) || Number(value || 0) || Number(rate || 0));
-            const taxBaseValue = formatCurrency(existingItem?.icmsBase || existingItem?.pisBase || existingItem?.cofinsBase || existingItem?.totalValue || 0);
+            const itemAutomaticTaxBase = Number(existingItem?.totalValue || 0);
+            const previousNoteTaxBase = Math.max(
+              Number(editingInvoice?.totalProducts || 0)
+                + Number(editingInvoice?.freightValue || 0)
+                - Number(editingInvoice?.discountValue || 0)
+                - (editingInvoice?.items || []).reduce((sum, item) => sum + Number(item.discountValue || 0), 0),
+              0,
+            );
+            const isLegacyStoredTaxBase = (storedBase?: number) => {
+              const currentBase = Number(storedBase || 0);
+              return Boolean(
+                existingItem
+                  && previousNoteTaxBase > 0
+                  && Math.abs(currentBase - previousNoteTaxBase) <= 0.01
+                  && Math.abs(currentBase - itemAutomaticTaxBase) > 0.01,
+              );
+            };
+            const normalizeStoredTaxBase = (storedBase?: number) => (
+              isLegacyStoredTaxBase(storedBase) ? itemAutomaticTaxBase : (Number(storedBase || 0) || itemAutomaticTaxBase)
+            );
+            const normalizeStoredTaxValue = (storedBase?: number, storedRate?: number, storedValue?: number) => (
+              isLegacyStoredTaxBase(storedBase)
+                ? (itemAutomaticTaxBase * Number(storedRate || 0)) / 100
+                : Number(storedValue || 0)
+            );
             return (
             <article className="item-card" key={itemIndex}>
               <div className="panel-title between">
@@ -3073,7 +3122,6 @@ function InvoiceForm({
                     <MoneyField label="Frete do item (demonstrativo)" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
                   </div>
                 )}
-                <input name={`taxBase_${itemIndex}`} type="hidden" defaultValue={taxBaseValue} />
                 <div className="subsection-label">Impostos</div>
                 <div className="tax-control-list">
                   <TaxControl
@@ -3081,11 +3129,12 @@ function InvoiceForm({
                     enabledName={`icmsEnabled_${itemIndex}`}
                     defaultChecked={taxIsEnabled(existingItem?.icmsBase, existingItem?.icmsValue, existingItem?.icmsRate)}
                     baseName={`icmsBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.icmsBase || 0)}
+                    baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.icmsBase))}
+                    automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`icmsRate_${itemIndex}`}
                     rateValue={existingItem?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)}
                     valueName={`icmsValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.icmsValue || 0)}
+                    valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.icmsBase, existingItem?.icmsRate, existingItem?.icmsValue))}
                     creditName={`icmsCreditable_${itemIndex}`}
                     creditDefault={existingItem?.icmsCreditable ?? true}
                     showCredit={isReceived}
@@ -3095,11 +3144,12 @@ function InvoiceForm({
                     enabledName={`pisEnabled_${itemIndex}`}
                     defaultChecked={taxIsEnabled(existingItem?.pisBase, existingItem?.pisValue, existingItem?.pisRate)}
                     baseName={`pisBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.pisBase || 0)}
+                    baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.pisBase))}
+                    automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`pisRate_${itemIndex}`}
                     rateValue={existingItem?.pisRate || fiscalConfig.pisRate}
                     valueName={`pisValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.pisValue || 0)}
+                    valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.pisBase, existingItem?.pisRate, existingItem?.pisValue))}
                     creditName={`pisCreditable_${itemIndex}`}
                     creditDefault={existingItem?.pisCreditable ?? true}
                     showCredit={isReceived}
@@ -3109,11 +3159,12 @@ function InvoiceForm({
                     enabledName={`cofinsEnabled_${itemIndex}`}
                     defaultChecked={taxIsEnabled(existingItem?.cofinsBase, existingItem?.cofinsValue, existingItem?.cofinsRate)}
                     baseName={`cofinsBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.cofinsBase || 0)}
+                    baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.cofinsBase))}
+                    automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`cofinsRate_${itemIndex}`}
                     rateValue={existingItem?.cofinsRate || fiscalConfig.cofinsRate}
                     valueName={`cofinsValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.cofinsValue || 0)}
+                    valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.cofinsBase, existingItem?.cofinsRate, existingItem?.cofinsValue))}
                     creditName={`cofinsCreditable_${itemIndex}`}
                     creditDefault={existingItem?.cofinsCreditable ?? true}
                     showCredit={isReceived}
@@ -3124,11 +3175,12 @@ function InvoiceForm({
                       enabledName={`ipiEnabled_${itemIndex}`}
                       defaultChecked={taxIsEnabled(existingItem?.ipiBase, existingItem?.ipiValue, existingItem?.ipiRate)}
                       baseName={`ipiBase_${itemIndex}`}
-                      baseValue={formatCurrency(existingItem?.ipiBase || 0)}
+                      baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.ipiBase))}
+                      automaticBaseValue={itemAutomaticTaxBase}
                       rateName={`ipiRate_${itemIndex}`}
                       rateValue={existingItem?.ipiRate || 0}
                       valueName={`ipiValue_${itemIndex}`}
-                      valueValue={formatCurrency(existingItem?.ipiValue || 0)}
+                      valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.ipiBase, existingItem?.ipiRate, existingItem?.ipiValue))}
                     />
                   )}
                   <TaxControl
@@ -3136,11 +3188,12 @@ function InvoiceForm({
                     enabledName={`ibsEnabled_${itemIndex}`}
                     defaultChecked={taxIsEnabled(existingItem?.ibsBase, existingItem?.ibsValue, existingItem?.ibsRate)}
                     baseName={`ibsBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.ibsBase || 0)}
+                    baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.ibsBase))}
+                    automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`ibsRate_${itemIndex}`}
                     rateValue={existingItem?.ibsRate || 0}
                     valueName={`ibsValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.ibsValue || 0)}
+                    valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.ibsBase, existingItem?.ibsRate, existingItem?.ibsValue))}
                     creditName={`ibsCreditable_${itemIndex}`}
                     creditDefault={existingItem?.ibsCreditable ?? true}
                     showCredit={isReceived}
@@ -3150,11 +3203,12 @@ function InvoiceForm({
                     enabledName={`cbsEnabled_${itemIndex}`}
                     defaultChecked={taxIsEnabled(existingItem?.cbsBase, existingItem?.cbsValue, existingItem?.cbsRate)}
                     baseName={`cbsBase_${itemIndex}`}
-                    baseValue={formatCurrency(existingItem?.cbsBase || 0)}
+                    baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.cbsBase))}
+                    automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`cbsRate_${itemIndex}`}
                     rateValue={existingItem?.cbsRate || 0}
                     valueName={`cbsValue_${itemIndex}`}
-                    valueValue={formatCurrency(existingItem?.cbsValue || 0)}
+                    valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.cbsBase, existingItem?.cbsRate, existingItem?.cbsValue))}
                     creditName={`cbsCreditable_${itemIndex}`}
                     creditDefault={existingItem?.cbsCreditable ?? true}
                     showCredit={isReceived}
@@ -3165,11 +3219,12 @@ function InvoiceForm({
                       enabledName={`issqnEnabled_${itemIndex}`}
                       defaultChecked={taxIsEnabled(existingItem?.issqnBase, existingItem?.issqnValue, existingItem?.issqnRate)}
                       baseName={`issqnBase_${itemIndex}`}
-                      baseValue={formatCurrency(existingItem?.issqnBase || 0)}
+                      baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.issqnBase))}
+                      automaticBaseValue={itemAutomaticTaxBase}
                       rateName={`issqnRate_${itemIndex}`}
                       rateValue={existingItem?.issqnRate || 0}
                       valueName={`issqnValue_${itemIndex}`}
-                      valueValue={formatCurrency(existingItem?.issqnValue || 0)}
+                      valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.issqnBase, existingItem?.issqnRate, existingItem?.issqnValue))}
                       retentionName={`issqnRetained_${itemIndex}`}
                       retentionDefault={Boolean(existingItem?.issqnRetained)}
                     />
