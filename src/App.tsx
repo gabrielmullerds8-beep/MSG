@@ -438,7 +438,7 @@ const cleanQuantity = (value: FormDataEntryValue | number | null | undefined) =>
 const formatQuantityInput = (value: FormDataEntryValue | number | null | undefined) =>
   new Intl.NumberFormat("pt-BR", {
     minimumFractionDigits: 3,
-    maximumFractionDigits: 3,
+    maximumFractionDigits: 4,
   }).format(cleanQuantity(value));
 
 const chartValue = (value: number) => (Number.isFinite(value) ? Math.max(value, 0) : 0);
@@ -449,10 +449,18 @@ const chartLabel = (value: string, max = 26) => {
 
 const digitsOnly = (value: string) => value.replace(/\D/g, "");
 
-const formatMoneyInput = (value: string) => {
+const formatMoneyInput = (value: string, maximumFractionDigits = 2) => {
   const amount = cleanNumber(value);
-  return formatCurrency(amount);
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  }).format(amount);
 };
+
+const formatUnitValueInput = (value: FormDataEntryValue | number | null | undefined) =>
+  formatMoneyInput(String(value ?? 0), 4);
 
 const formatPercentInput = (value: string) => {
   const amount = cleanNumber(value);
@@ -1077,6 +1085,7 @@ function MoneyField({
   onChangeValue,
   manualOverride,
   defaultManualOverride,
+  maximumFractionDigits = 2,
 }: {
   label: string;
   name: string;
@@ -1086,6 +1095,7 @@ function MoneyField({
   onChangeValue?: (value: string) => void;
   manualOverride?: boolean;
   defaultManualOverride?: boolean;
+  maximumFractionDigits?: number;
 }) {
   return (
     <label className="field">
@@ -1103,7 +1113,7 @@ function MoneyField({
         }}
         onChange={(event) => onChangeValue?.(event.currentTarget.value)}
         onBlur={(event) => {
-          event.currentTarget.value = formatMoneyInput(event.currentTarget.value);
+          event.currentTarget.value = formatMoneyInput(event.currentTarget.value, maximumFractionDigits);
           onChangeValue?.(event.currentTarget.value);
           if (autoCalc) event.currentTarget.dispatchEvent(new Event("input", { bubbles: true }));
         }}
@@ -3049,7 +3059,13 @@ function InvoiceForm({
                 )}
                 <div className="subsection-label">Valores</div>
                 <Field label="Quantidade" name={`quantity_${itemIndex}`} defaultValue={formatQuantityInput(existingItem?.quantity ?? "1")} inputMode="decimal" sanitize="decimal" />
-                <MoneyField label="Valor unitário" name={`unitValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.unitValue || 0)} autoCalc />
+                <MoneyField
+                  label="Valor unitário"
+                  name={`unitValue_${itemIndex}`}
+                  defaultValue={formatUnitValueInput(existingItem?.unitValue || 0)}
+                  maximumFractionDigits={4}
+                  autoCalc
+                />
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
                 {!isNonProductDocument && (
