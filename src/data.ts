@@ -46,7 +46,8 @@ export const fiscalConfig: FiscalConfig = {
     "1656": { considerCost: true },
     "1353": { considerCost: true },
     "1933": { considerCost: true },
-    "1949": { considerCost: true },
+    "1949": { considerSale: false, considerCost: false },
+    "5949": { considerSale: false, considerCost: false },
   },
   csts: ["000", "020", "040", "041", "051", "060", "090"],
   invoiceStatuses: ["Faturada", "Pendente", "Cancelada", "Em conferência"],
@@ -119,6 +120,11 @@ export const fiscalConfig: FiscalConfig = {
 
 export const getCfopCode = (value: string) => String(value || "").split(" - ")[0].trim();
 
+const nonFinancialRemittanceCfops = new Set(["1949", "5949"]);
+
+export const isNonFinancialRemittanceCfop = (value: string) =>
+  nonFinancialRemittanceCfops.has(getCfopCode(value));
+
 export const getCfopRule = (cfop: string): CfopRule => {
   const code = getCfopCode(cfop);
   return fiscalConfig.cfopRules?.[code] || {};
@@ -130,11 +136,13 @@ const isCancelledInvoice = (invoice: Invoice) =>
 export const invoiceConsidersSale = (invoice: Invoice) =>
   invoice.invoiceType === "issued" &&
   !isCancelledInvoice(invoice) &&
+  !isNonFinancialRemittanceCfop(invoice.mainCfop) &&
   Boolean(getCfopRule(invoice.mainCfop).considerSale);
 
 export const invoiceConsidersCost = (invoice: Invoice) =>
   invoice.invoiceType === "received" &&
   !isCancelledInvoice(invoice) &&
+  !isNonFinancialRemittanceCfop(invoice.mainCfop) &&
   Boolean(getCfopRule(invoice.mainCfop).considerCost);
 
 export const invoiceHasFinancialEffect = (invoice: Invoice) =>

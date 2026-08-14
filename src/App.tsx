@@ -54,6 +54,7 @@ import {
   invoiceConsidersCost,
   invoiceConsidersSale,
   invoiceHasFinancialEffect,
+  isNonFinancialRemittanceCfop,
   newId,
   todayIso,
 } from "./data";
@@ -273,6 +274,8 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.closedPeriods = nextConfig.closedPeriods ? { ...nextConfig.closedPeriods } : { ...(fiscalConfig.closedPeriods || {}) };
   fiscalConfig.cfops = replaceList(fiscalConfig.cfops, nextConfig.cfops);
   fiscalConfig.cfopRules = nextConfig.cfopRules ? { ...nextConfig.cfopRules } : { ...(fiscalConfig.cfopRules || {}) };
+  fiscalConfig.cfopRules["1949"] = { considerSale: false, considerCost: false };
+  fiscalConfig.cfopRules["5949"] = { considerSale: false, considerCost: false };
   fiscalConfig.csts = replaceList(fiscalConfig.csts, nextConfig.csts);
   fiscalConfig.invoiceStatuses = sortConfigOptions(nextConfig.invoiceStatuses || configuredInvoiceStatuses());
   fiscalConfig.categories = sortConfigOptions([
@@ -570,6 +573,7 @@ const periodLabel = (period: string) => {
 };
 const isPeriodClosed = (period: string) => Boolean(period && fiscalConfig.closedPeriods?.[period]);
 const hasInvoiceCostCenter = (invoice: Invoice) =>
+  isNonFinancialRemittanceCfop(invoice.mainCfop) ||
   Boolean(invoice.costCenter || invoice.items?.some((item) => item.costCenter));
 const cfopIsConfigured = (invoice: Invoice) => {
   if (invoice.natureOperation === "Fatura" || invoice.natureOperation === "Recibo") {
@@ -764,6 +768,7 @@ function makeItem(
   const isServiceDocument = invoiceType === "received" && documentModel === "NFS-e";
   const isFreightDocument = invoiceType === "received" && documentModel === "CT-e";
   const isNonProductDocument = isServiceDocument || isFreightDocument;
+  const isSimpleRemittance = isNonFinancialRemittanceCfop(mainCfop);
   const quantity = cleanQuantity(form.get(`quantity${suffix}`));
   const unitValue = cleanNumber(form.get(`unitValue${suffix}`));
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
@@ -805,8 +810,8 @@ function makeItem(
     productId: String(form.get(`productId${suffix}`) || ""),
     itemCode: String(form.get(`itemCode${suffix}`) || ""),
     description: String(form.get(`description${suffix}`) || ""),
-    category: String(form.get(`category${suffix}`) || ""),
-    costCenter: String(form.get(`costCenter${suffix}`) || ""),
+    category: isSimpleRemittance ? "" : String(form.get(`category${suffix}`) || ""),
+    costCenter: isSimpleRemittance ? "" : String(form.get(`costCenter${suffix}`) || ""),
     accountingAccount: "",
     productColor: String(form.get(`productColor${suffix}`) || ""),
     ncm: isNonProductDocument ? "" : String(form.get(`ncm${suffix}`) || ""),
@@ -2403,6 +2408,7 @@ function InvoiceForm({
   const isServiceReceived = isReceived && documentModel === "NFS-e";
   const isFreightDocument = isReceived && documentModel === "CT-e";
   const isNonProductDocument = isServiceReceived || isFreightDocument;
+  const isSimpleRemittance = isNonFinancialRemittanceCfop(selectedMainCfop);
   const existingIssqnRetention = editingInvoice?.items?.reduce(
     (total, item) => total + (item.issqnRetained ? Number(item.issqnValue || 0) : 0),
     0,
@@ -2626,13 +2632,13 @@ function InvoiceForm({
       nextWarnings.push(isReceived ? "Selecione um fornecedor cadastrado antes de salvar." : "Selecione um cliente cadastrado antes de salvar.");
     }
     if (!cfopExists) nextWarnings.push("CFOP selecionado não está cadastrado nas configurações.");
-    if (cfopCode && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
+    if (cfopCode && !isNonFinancialRemittanceCfop(cfopCode) && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
       nextWarnings.push("CFOP sem marcação de venda ou custo. A nota será listada, mas não entra nos relatórios financeiros.");
     }
-    if (net > 0 && cfopCode && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
+    if (net > 0 && cfopCode && !isNonFinancialRemittanceCfop(cfopCode) && documentModel !== "NFS-e" && !cfopRule?.considerSale && !cfopRule?.considerCost) {
       nextWarnings.push("Há valor na nota com CFOP sem impacto financeiro. Confira se é remessa/simbólica.");
     }
-    if (itemIndexes.some((itemIndex) => !String(formData.get(`costCenter_${itemIndex}`) || "").trim() && isReceived)) {
+    if (!isNonFinancialRemittanceCfop(cfopCode) && itemIndexes.some((itemIndex) => !String(formData.get(`costCenter_${itemIndex}`) || "").trim() && isReceived)) {
       nextWarnings.push("Há item sem centro de custo.");
     }
     const hasEnabledTaxWithoutRate = itemIndexes.some((itemIndex) =>
@@ -3022,8 +3028,8 @@ function InvoiceForm({
                 ) : (
                   <Field label="Descrição do produto/serviço" name={`description_${itemIndex}`} defaultValue={existingItem?.description || ""} required sanitize="productName" />
                 )}
-                {isReceived && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
-                {isReceived && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || ""} />}
+                {isReceived && !isSimpleRemittance && <Field label="Categoria" name={`category_${itemIndex}`} options={fiscalConfig.categories} defaultValue={existingItem?.category || selectedProduct?.defaultCategory || ""} />}
+                {isReceived && !isSimpleRemittance && <Field label="Centro de custo" name={`costCenter_${itemIndex}`} options={fiscalConfig.costCenters} defaultValue={existingItem?.costCenter || ""} />}
                 {!isNonProductDocument && (
                   <>
                     <Field label="NCM" name={`ncm_${itemIndex}`} defaultValue={onlyDigits(existingItem?.ncm || selectedProduct?.ncm)} required inputMode="numeric" sanitize="digits" pattern="[0-9]*" />
@@ -6665,8 +6671,8 @@ function SettingsView({
 
     if (nextCode) {
       fiscalConfig.cfopRules[nextCode] = {
-        considerSale: cfopConsiderSale,
-        considerCost: cfopConsiderCost,
+        considerSale: isNonFinancialRemittanceCfop(nextCode) ? false : cfopConsiderSale,
+        considerCost: isNonFinancialRemittanceCfop(nextCode) ? false : cfopConsiderCost,
       };
     }
   }
@@ -6806,6 +6812,7 @@ function SettingsView({
                     <input
                       type="checkbox"
                       checked={cfopConsiderSale}
+                      disabled={isNonFinancialRemittanceCfop(configItemValue)}
                       onChange={(event) => setCfopConsiderSale(event.target.checked)}
                     />
                     Considerar venda
@@ -6814,6 +6821,7 @@ function SettingsView({
                     <input
                       type="checkbox"
                       checked={cfopConsiderCost}
+                      disabled={isNonFinancialRemittanceCfop(configItemValue)}
                       onChange={(event) => setCfopConsiderCost(event.target.checked)}
                     />
                     Considerar custo
