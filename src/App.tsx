@@ -673,16 +673,24 @@ const findPartyForInvoice = (
 ) => {
   if (!invoice) return undefined;
   const candidates = parties.filter((party) => party.kind === kind);
+  const invoiceDocument = onlyDigits(invoice.partyCnpj);
+  const byDocument = invoiceDocument
+    ? candidates.find((party) => onlyDigits(party.cnpj) === invoiceDocument)
+    : undefined;
+  if (byDocument) return byDocument;
+
   const invoiceName = normalizeSearch(invoice.partyName || "").trim();
-  const byName = invoiceName
+  return invoiceName
     ? candidates.find((party) => normalizeSearch(party.name || "").trim() === invoiceName)
     : undefined;
-  if (byName) return byName;
-
-  const invoiceDocument = onlyDigits(invoice.partyCnpj);
-  if (!invoiceDocument) return undefined;
-  return candidates.find((party) => onlyDigits(party.cnpj) === invoiceDocument);
 };
+
+const currentInvoicePartyName = (parties: Party[], invoice: Invoice) =>
+  findPartyForInvoice(
+    parties,
+    invoice.invoiceType === "issued" ? "customer" : "supplier",
+    invoice,
+  )?.name || invoice.partyName;
 
 const isCloseWord = (word: string, term: string) => {
   if (term.length < 4 || !/[a-z]/.test(term) || Math.abs(word.length - term.length) > 1) return false;
@@ -2140,11 +2148,13 @@ function InvoiceRows({
   compact,
   showPf,
   actions,
+  partyNameResolver,
 }: {
   invoices: Invoice[];
   compact?: boolean;
   showPf?: boolean;
   actions?: (invoice: Invoice) => React.ReactNode;
+  partyNameResolver?: (invoice: Invoice) => string;
 }) {
   const showPfValue = !compact && (showPf || invoices.some((invoice) => Number(invoice.pfValue || 0) > 0));
 
@@ -2167,7 +2177,7 @@ function InvoiceRows({
           <tr key={invoice.id}>
             <td>{formatDate(invoice.issueDate)}</td>
             <td>{invoice.invoiceNumber}</td>
-            <td>{invoice.partyName}</td>
+            <td>{partyNameResolver?.(invoice) || invoice.partyName}</td>
             <td>{invoice.mainCfop}</td>
             <td>{formatCurrency(invoice.totalInvoice)}</td>
             {showPfValue && <td>{formatCurrency(invoice.pfValue || 0)}</td>}
@@ -2290,6 +2300,7 @@ function InvoiceDetailPanel({ invoice, onClose }: { invoice: Invoice; onClose: (
 function InvoiceList({
   type,
   invoices,
+  parties,
   onNew,
   onDelete,
   onOpen,
@@ -2297,6 +2308,7 @@ function InvoiceList({
 }: {
   type: InvoiceType;
   invoices: Invoice[];
+  parties: Party[];
   onNew: () => void;
   onDelete: (id: string) => void;
   onOpen: (invoice: Invoice) => void;
@@ -2311,9 +2323,10 @@ function InvoiceList({
   const cfopOptions = fiscalConfig.cfops.filter(
     (option) => type !== "received" || !/^NFS-e\s*-\s*Serviço tomado$/i.test(option.trim()),
   );
+  const resolvePartyName = (invoice: Invoice) => currentInvoicePartyName(parties, invoice);
   const filtered = invoices
     .filter((invoice) => invoice.invoiceType === type)
-    .filter((invoice) => searchMatches(invoiceSearchText(invoice), query))
+    .filter((invoice) => searchMatches(invoiceSearchText({ ...invoice, partyName: resolvePartyName(invoice) }), query))
     .filter((invoice) => withinDateRange(invoiceDate(invoice), dateStart, dateEnd))
     .filter((invoice) => (
       !effectiveCfop
@@ -2376,7 +2389,7 @@ function InvoiceList({
                 filtered.map((invoice) => ({
                   numero: invoice.invoiceNumber,
                   data: formatDate(invoice.entryDate || invoice.issueDate),
-                  parte: invoice.partyName,
+                  parte: resolvePartyName(invoice),
                   cnpj: invoice.partyCnpj,
                   cfop: invoice.mainCfop,
                   ncm: invoice.items[0]?.ncm,
@@ -2396,6 +2409,7 @@ function InvoiceList({
           <InvoiceRows
             invoices={filtered}
             showPf
+            partyNameResolver={resolvePartyName}
             actions={(invoice) => (
               <div className="row-actions">
                 <button className="icon-btn" title="Visualizar" onClick={() => onOpen(invoice)}>
@@ -7021,6 +7035,7 @@ export default function App() {
   const [notesMenuOpen, setNotesMenuOpen] = useState(false);
   const [fiscalMenuOpen, setFiscalMenuOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
+  const partyReconciliationRef = useRef<Set<string>>(new Set());
   const scrollMemorySelector = ".table-wrap, .financial-table-scroll, .checks-list, .check-table-wrap";
 
   function saveCurrentViewScroll() {
@@ -7284,6 +7299,35 @@ export default function App() {
       client.removeChannel(channel);
     };
   }, [logged]);
+
+  useEffect(() => {
+    if (!logged || store.syncMode !== "supabase" || !registryParties.length || !store.invoices.length) return;
+
+    store.invoices.forEach((invoice) => {
+      const document = onlyDigits(invoice.partyCnpj);
+      if (!document) return;
+
+      const expectedKind: Party["kind"] = invoice.invoiceType === "issued" ? "customer" : "supplier";
+      const party = registryParties.find(
+        (candidate) => candidate.kind === expectedKind && onlyDigits(candidate.cnpj) === document,
+      );
+      if (!party || (invoice.partyName === party.name && onlyDigits(invoice.partyCnpj) === onlyDigits(party.cnpj))) {
+        return;
+      }
+
+      const signature = `${invoice.id}:${party.name}:${party.cnpj}`;
+      if (partyReconciliationRef.current.has(signature)) return;
+
+      partyReconciliationRef.current.add(signature);
+      void store.saveInvoice({
+        ...invoice,
+        partyName: party.name,
+        partyCnpj: party.cnpj,
+      }).finally(() => {
+        partyReconciliationRef.current.delete(signature);
+      });
+    });
+  }, [logged, registryParties, store.invoices, store.saveInvoice, store.syncMode]);
 
   const updateRegistryParties = (value: Party[] | ((current: Party[]) => Party[])) => {
     setRegistryParties((current) => {
@@ -7644,6 +7688,7 @@ export default function App() {
             <InvoiceList
               type="issued"
               invoices={store.invoices}
+              parties={registryParties}
               onNew={() => openNewInvoice("new-issued")}
               onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
@@ -7654,6 +7699,7 @@ export default function App() {
             <InvoiceList
               type="received"
               invoices={store.invoices}
+              parties={registryParties}
               onNew={() => openNewInvoice("new-received")}
               onDelete={guardedDeleteInvoice}
               onOpen={openInvoiceForm}
