@@ -429,6 +429,11 @@ button {
   min-width: 160px;
 }
 
+.financial-search-field {
+  flex: 1 1 320px;
+  min-width: min(100%, 320px);
+}
+
 .form-grid .field {
   min-width: 0;
 }

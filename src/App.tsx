@@ -746,6 +746,7 @@ const invoiceSearchText = (invoice: Invoice) =>
     invoice.additionalInfo,
     invoice.internalNotes,
     invoice.items.map((item) => [
+      item.itemCode,
       item.description,
       item.ncm,
       item.cfop,
@@ -4076,6 +4077,7 @@ function FinancialView({
   const [listType, setListType] = useSessionState<"all" | "receivable" | "payable">(`${sessionKey}:list-type`, fixedType || "all");
   const [statusFilter, setStatusFilter] = useSessionState<"all" | "open" | "paid">(`${sessionKey}:status`, "open");
   const [holderFilter, setHolderFilter] = useSessionState(`${sessionKey}:holder`, "all");
+  const [searchQuery, setSearchQuery] = useSessionState(`${sessionKey}:search`, "");
   const [bankBalance, setBankBalance] = useState(() => formatCurrency(bankBalanceValue));
   const [paymentDates, setPaymentDates] = useState<Record<string, string>>({});
   const [financialNotes, setFinancialNotes] = useState<Record<string, string>>({});
@@ -4148,14 +4150,16 @@ function FinancialView({
   };
   const byEntryHolder = (entry: FinancialEntry) =>
     holderFilter === "all" || entryHolder(entry) === holderFilter;
+  const byEntrySearch = (entry: FinancialEntry) =>
+    searchMatches(invoiceSearchText(entry.invoice), searchQuery);
   const byDueDate = (a: FinancialEntry, b: FinancialEntry) =>
     a.installment.dueDate.localeCompare(b.installment.dueDate) ||
     a.invoice.partyName.localeCompare(b.invoice.partyName) ||
     a.invoice.invoiceNumber.localeCompare(b.invoice.invoiceNumber);
-  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
-  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
-  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
-  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry)).sort(byDueDate);
+  const payables = allEntries.filter((entry) => entry.kind === "payable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry) && byEntrySearch(entry)).sort(byDueDate);
+  const receivables = allEntries.filter((entry) => entry.kind === "receivable" && byEntryStatus(entry) && byEntryPeriod(entry) && byEntryHolder(entry) && byEntrySearch(entry)).sort(byDueDate);
+  const openPayables = allEntries.filter((entry) => entry.kind === "payable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry) && byEntrySearch(entry)).sort(byDueDate);
+  const openReceivables = allEntries.filter((entry) => entry.kind === "receivable" && !entryPaid(entry) && byEntryPeriod(entry) && byEntryHolder(entry) && byEntrySearch(entry)).sort(byDueDate);
   const inRange = (entry: FinancialEntry, days: number) => {
     const dueDate = entry.installment.dueDate;
     return dueDate >= today && dueDate <= addDays(days);
@@ -4396,6 +4400,18 @@ function FinancialView({
                 <option key={holder} value={holder}>{holder}</option>
               ))}
             </select>
+          </label>
+          <label className="field financial-search-field">
+            <span>Buscar títulos</span>
+            <div className="search-input-control">
+              <Search size={17} aria-hidden="true" />
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Nota, fornecedor, cliente ou produto"
+                aria-label="Buscar por número da nota, fornecedor, cliente ou produto"
+              />
+            </div>
           </label>
         </div>
       </section>
