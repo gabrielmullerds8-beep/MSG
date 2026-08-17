@@ -247,7 +247,10 @@ const findProductForItem = (products: ProductItem[], item?: InvoiceItem) => {
 
 const fiscalConfigSnapshot = (): FiscalConfig => ({
   ...fiscalConfig,
-  closedPeriods: { ...(fiscalConfig.closedPeriods || {}) },
+  // Mantém a chave antiga durante a transição para não destravar clientes ainda não atualizados.
+  closedPeriods: { ...(fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}) },
+  fiscalClosedPeriods: { ...(fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}) },
+  financialClosedPeriods: { ...(fiscalConfig.financialClosedPeriods || {}) },
   cfops: sortConfigOptions(fiscalConfig.cfops),
   cfopRules: { ...(fiscalConfig.cfopRules || {}) },
   csts: sortConfigOptions(fiscalConfig.csts),
@@ -271,7 +274,14 @@ const applyFiscalConfig = (nextConfig: Partial<FiscalConfig>) => {
   fiscalConfig.cofinsRate = Number(nextConfig.cofinsRate ?? fiscalConfig.cofinsRate);
   fiscalConfig.cfemRate = Number(nextConfig.cfemRate ?? fiscalConfig.cfemRate);
   fiscalConfig.bankBalance = Number(nextConfig.bankBalance ?? fiscalConfig.bankBalance ?? 0);
-  fiscalConfig.closedPeriods = nextConfig.closedPeriods ? { ...nextConfig.closedPeriods } : { ...(fiscalConfig.closedPeriods || {}) };
+  const nextFiscalClosedPeriods = nextConfig.fiscalClosedPeriods || nextConfig.closedPeriods;
+  fiscalConfig.fiscalClosedPeriods = nextFiscalClosedPeriods
+    ? { ...nextFiscalClosedPeriods }
+    : { ...(fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}) };
+  fiscalConfig.closedPeriods = { ...fiscalConfig.fiscalClosedPeriods };
+  fiscalConfig.financialClosedPeriods = nextConfig.financialClosedPeriods
+    ? { ...nextConfig.financialClosedPeriods }
+    : { ...(fiscalConfig.financialClosedPeriods || {}) };
   fiscalConfig.cfops = replaceList(fiscalConfig.cfops, nextConfig.cfops);
   fiscalConfig.cfopRules = nextConfig.cfopRules ? { ...nextConfig.cfopRules } : { ...(fiscalConfig.cfopRules || {}) };
   fiscalConfig.cfopRules["1949"] = { considerSale: false, considerCost: false };
@@ -579,7 +589,12 @@ const periodLabel = (period: string) => {
   const date = new Date(Number(year), Number(month) - 1, 1);
   return new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(date);
 };
-const isPeriodClosed = (period: string) => Boolean(period && fiscalConfig.closedPeriods?.[period]);
+const isFiscalPeriodClosed = (period: string) => Boolean(
+  period && (fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods)?.[period],
+);
+const isFinancialPeriodClosed = (period: string) => Boolean(
+  period && fiscalConfig.financialClosedPeriods?.[period],
+);
 const hasInvoiceCostCenter = (invoice: Invoice) =>
   isNonFinancialRemittanceCfop(invoice.mainCfop) ||
   Boolean(invoice.costCenter || invoice.items?.some((item) => item.costCenter));
@@ -3700,15 +3715,15 @@ function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (in
 
 function TaxView({
   invoices,
-  closedPeriods,
+  fiscalClosedPeriods,
 }: {
   totals: ReturnType<typeof useFiscalStore>["totals"];
   invoices: Invoice[];
-  closedPeriods: Record<string, string>;
+  fiscalClosedPeriods: Record<string, string>;
 }) {
   const [period, setPeriod] = useSessionState("tax:period", "2026-06");
   const [openBreakdown, setOpenBreakdown] = useSessionState<string | null>("tax:open-breakdown", null);
-  const closedAt = closedPeriods[period];
+  const closedAt = fiscalClosedPeriods[period];
   const periodInvoices = invoices.filter((invoice) => {
     const date = invoice.invoiceType === "received" ? invoice.entryDate || invoice.issueDate : invoice.issueDate;
     return date?.slice(0, 7) === period;
@@ -3898,12 +3913,14 @@ function TaxDetailCard({
 
 function ClosuresView({
   invoices,
-  closedPeriods,
+  fiscalClosedPeriods,
+  financialClosedPeriods,
   onTogglePeriodLock,
 }: {
   invoices: Invoice[];
-  closedPeriods: Record<string, string>;
-  onTogglePeriodLock: (period: string, close: boolean) => void;
+  fiscalClosedPeriods: Record<string, string>;
+  financialClosedPeriods: Record<string, string>;
+  onTogglePeriodLock: (period: string, close: boolean, kind: "fiscal" | "financial") => void;
 }) {
   const today = todayIso();
   const currentPeriod = today.slice(0, 7);
@@ -3911,10 +3928,12 @@ function ClosuresView({
   const periods = Array.from(new Set([
     currentPeriod,
     ...invoices.map(invoicePeriodKey).filter(Boolean),
-    ...Object.keys(closedPeriods || {}),
+    ...Object.keys(fiscalClosedPeriods || {}),
+    ...Object.keys(financialClosedPeriods || {}),
   ])).sort((a, b) => b.localeCompare(a));
   const periodInvoices = invoices.filter((invoice) => invoicePeriodKey(invoice) === period);
-  const closedAt = closedPeriods?.[period];
+  const fiscalClosedAt = fiscalClosedPeriods?.[period];
+  const financialClosedAt = financialClosedPeriods?.[period];
   const financialInvoices = periodInvoices.filter(invoiceHasFinancialEffect);
   const pendingCostCenter = financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length;
   const pendingCfop = periodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length;
@@ -3922,7 +3941,15 @@ function ClosuresView({
   const pendingHolders = periodInvoices.filter((invoice) =>
     invoiceInstallments(invoice).some((installment) => !installment.holder),
   ).length;
-  const pendingTotal = pendingCostCenter + pendingCfop + pendingLinks + pendingHolders;
+  const pendingTotal = pendingCostCenter + pendingCfop + pendingLinks;
+  const financialMovementCount = (targetPeriod: string) => invoices.reduce((count, invoice) => (
+    count + invoiceInstallments(invoice).reduce((installmentCount, installment) => {
+      const regularMovement = installment.paid && installment.paymentDate?.slice(0, 7) === targetPeriod ? 1 : 0;
+      const pfMovement = installment.pfPaid && installment.pfPaymentDate?.slice(0, 7) === targetPeriod ? 1 : 0;
+      return installmentCount + regularMovement + pfMovement;
+    }, 0)
+  ), 0);
+  const periodFinancialMovements = financialMovementCount(period);
 
   return (
     <div className="view-stack">
@@ -3933,24 +3960,54 @@ function ClosuresView({
             <input type="month" value={period} onChange={(event) => setPeriod(event.target.value)} />
           </label>
           <label className="field">
-            <span>Status</span>
-            <input value={closedAt ? `Fechada em ${formatDate(closedAt)}` : "Aberta"} readOnly />
+            <span>Fechamento fiscal</span>
+            <input value={fiscalClosedAt ? `Fechado em ${formatDate(fiscalClosedAt)}` : "Aberto"} readOnly />
           </label>
-        </div>
-        <div className="toolbar-actions">
-          <ActionButton icon={Lock} variant={closedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !closedAt)}>
-            {closedAt ? "Desbloquear mês" : "Fechar mês"}
-          </ActionButton>
+          <label className="field">
+            <span>Fechamento financeiro</span>
+            <input value={financialClosedAt ? `Fechado em ${formatDate(financialClosedAt)}` : "Aberto"} readOnly />
+          </label>
         </div>
       </section>
 
       <section className="stats-grid">
         <StatCard title="Notas no período" value={String(periodInvoices.length)} tone="info" />
-        <StatCard title="Pendências de conferência" value={String(pendingTotal)} tone={pendingTotal ? "warn" : "good"} />
-        <StatCard title="Notas sem centro de custo" value={String(pendingCostCenter)} tone={pendingCostCenter ? "warn" : "good"} />
-        <StatCard title="CFOP sem configuração" value={String(pendingCfop)} tone={pendingCfop ? "warn" : "good"} />
-        <StatCard title="Vínculos pendentes" value={String(pendingLinks)} tone={pendingLinks ? "warn" : "good"} />
+        <StatCard title="Liquidações no período" value={String(periodFinancialMovements)} tone="info" />
+        <StatCard title="Pendências fiscais" value={String(pendingTotal)} tone={pendingTotal ? "warn" : "good"} />
         <StatCard title="Lançamentos sem portador" value={String(pendingHolders)} tone={pendingHolders ? "warn" : "good"} />
+      </section>
+
+      <section className="split-grid">
+        <section className="panel closure-mode-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Fechamento fiscal</h2>
+              <p className="muted">Protege notas, faturas e operações pela competência de emissão ou entrada.</p>
+            </div>
+            <div className={`period-lock-pill ${fiscalClosedAt ? "closed" : "open"}`}>
+              <Lock size={15} />
+              {fiscalClosedAt ? "Fechado" : "Aberto"}
+            </div>
+          </div>
+          <ActionButton icon={Lock} variant={fiscalClosedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !fiscalClosedAt, "fiscal")}>
+            {fiscalClosedAt ? "Desbloquear fiscal" : "Fechar fiscal"}
+          </ActionButton>
+        </section>
+        <section className="panel closure-mode-card">
+          <div className="panel-heading">
+            <div>
+              <h2>Fechamento financeiro</h2>
+              <p className="muted">Protege somente baixas e conciliações pela data efetiva do pagamento ou recebimento.</p>
+            </div>
+            <div className={`period-lock-pill ${financialClosedAt ? "closed" : "open"}`}>
+              <Lock size={15} />
+              {financialClosedAt ? "Fechado" : "Aberto"}
+            </div>
+          </div>
+          <ActionButton icon={Lock} variant={financialClosedAt ? "ghost" : "primary"} onClick={() => onTogglePeriodLock(period, !financialClosedAt, "financial")}>
+            {financialClosedAt ? "Desbloquear financeiro" : "Fechar financeiro"}
+          </ActionButton>
+        </section>
       </section>
 
       <section className="panel">
@@ -3960,10 +4017,11 @@ function ClosuresView({
             <thead>
               <tr>
                 <th>Competência</th>
-                <th>Status</th>
+                <th>Fiscal</th>
+                <th>Financeiro</th>
                 <th>Notas</th>
-                <th>Pendências</th>
-                <th>Ação</th>
+                <th>Liquidações</th>
+                <th>Pendências fiscais</th>
               </tr>
             </thead>
             <tbody>
@@ -3972,20 +4030,17 @@ function ClosuresView({
                 const pending =
                   rows.filter(invoiceHasFinancialEffect).filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
                   rows.filter((invoice) => !cfopIsConfigured(invoice)).length +
-                  rows.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length +
-                  rows.filter((invoice) => invoiceInstallments(invoice).some((installment) => !installment.holder)).length;
-                const itemClosedAt = closedPeriods?.[item];
+                  rows.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
+                const fiscalItemClosedAt = fiscalClosedPeriods?.[item];
+                const financialItemClosedAt = financialClosedPeriods?.[item];
                 return (
                   <tr key={item}>
                     <td>{periodLabel(item)}</td>
-                    <td><Badge value={itemClosedAt ? "Fechada" : "Aberta"} /></td>
+                    <td><Badge value={fiscalItemClosedAt ? "Fechada" : "Aberta"} /></td>
+                    <td><Badge value={financialItemClosedAt ? "Fechada" : "Aberta"} /></td>
                     <td>{rows.length}</td>
+                    <td>{financialMovementCount(item)}</td>
                     <td>{pending}</td>
-                    <td>
-                      <button className="btn ghost" type="button" onClick={() => onTogglePeriodLock(item, !itemClosedAt)}>
-                        {itemClosedAt ? "Desbloquear" : "Fechar"}
-                      </button>
-                    </td>
                   </tr>
                 );
               })}
@@ -4027,6 +4082,7 @@ function FinancialView({
   const [settlementEntry, setSettlementEntry] = useState<FinancialEntry | null>(null);
   const [detailEntry, setDetailEntry] = useState<FinancialEntry | null>(null);
   const [settlementHolder, setSettlementHolder] = useState("Itaú");
+  const [settlementPaymentCondition, setSettlementPaymentCondition] = useState("a prazo");
   const [settlementDiscount, setSettlementDiscount] = useState("R$ 0,00");
   const [settlementAddition, setSettlementAddition] = useState("R$ 0,00");
   useEffect(() => {
@@ -4124,20 +4180,19 @@ function FinancialView({
   const visibleReceivables = listType === "payable" ? [] : receivables;
   const entryClosedPeriods = (entry: FinancialEntry, nextPaymentDate?: string) => {
     const periods = [
-      entry.installment.dueDate,
       entryPaymentDate(entry),
       nextPaymentDate,
     ]
       .filter(Boolean)
       .map((date) => String(date).slice(0, 7))
-      .filter((period, index, values) => period && values.indexOf(period) === index && isPeriodClosed(period));
+      .filter((period, index, values) => period && values.indexOf(period) === index && isFinancialPeriodClosed(period));
     return periods;
   };
   const ensureEntryOpen = (entry: FinancialEntry, nextPaymentDate?: string) => {
     const closedPeriods = entryClosedPeriods(entry, nextPaymentDate);
     if (!closedPeriods.length) return true;
     window.alert(
-      `Este lançamento financeiro pertence a ${closedPeriods.map(periodLabel).join(" e ")}, competência já fechada. Desbloqueie o período em Fechamentos para continuar.`,
+      `A liquidação pertence a ${closedPeriods.map(periodLabel).join(" e ")}, período financeiro já fechado. Desbloqueie o fechamento financeiro para continuar.`,
     );
     return false;
   };
@@ -4163,6 +4218,7 @@ function FinancialView({
     setPaymentDates((current) => ({ ...current, [entry.id]: current[entry.id] || entryPaymentDate(entry) || today }));
     setFinancialNotes((current) => ({ ...current, [entry.id]: current[entry.id] ?? entryNotes(entry) ?? "" }));
     setSettlementHolder(entryHolder(entry));
+    setSettlementPaymentCondition(entry.installment.paymentCondition || entry.invoice.paymentCondition || "a prazo");
     setSettlementDiscount(formatCurrency(mode === "pf" ? entry.installment.pfDiscountValue || 0 : entry.installment.discountValue || 0));
     setSettlementAddition(formatCurrency(mode === "pf" ? entry.installment.pfAdditionValue || 0 : entry.installment.additionValue || 0));
     setSettlementEntry(entry);
@@ -4170,6 +4226,11 @@ function FinancialView({
   const saveSettlement = async (entry: FinancialEntry) => {
     const paymentDate = paymentDates[entry.id] || today;
     if (!ensureEntryOpen(entry, paymentDate)) return;
+    const paymentCondition = settlementPaymentCondition.trim();
+    if (!paymentCondition) {
+      window.alert("Selecione a forma de pagamento antes de salvar a liquidação.");
+      return;
+    }
     const notes = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
     const discountValue = cleanNumber(settlementDiscount);
     const additionValue = cleanNumber(settlementAddition);
@@ -4181,6 +4242,7 @@ function FinancialView({
     if (!window.confirm(confirmation)) return;
     const saved = await updateInstallment(entry, mode === "pf"
       ? {
+          paymentCondition,
           pfPaid: true,
           pfPaymentDate: paymentDate,
           pfNotes: notes,
@@ -4190,6 +4252,7 @@ function FinancialView({
           pfHolder: settlementHolder,
         }
       : {
+          paymentCondition,
           paid: true,
           paymentDate,
           notes,
@@ -4219,6 +4282,7 @@ function FinancialView({
     }
   };
   const saveFinancialNote = (entry: FinancialEntry) => {
+    if (!ensureEntryOpen(entry)) return;
     const note = financialNotes[entry.id] ?? entryNotes(entry) ?? "";
     if (note !== (entryNotes(entry) || "")) {
       updateInstallment(entry, mode === "pf" ? { pfNotes: note } : { notes: note });
@@ -4452,6 +4516,17 @@ function FinancialView({
                 <select value={settlementHolder} onChange={(event) => setSettlementHolder(event.target.value)}>
                   {configuredHolders().map((holder) => (
                     <option key={holder} value={holder}>{holder}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Forma de pagamento</span>
+                <select
+                  value={settlementPaymentCondition}
+                  onChange={(event) => setSettlementPaymentCondition(event.target.value)}
+                >
+                  {configuredPaymentConditions().map((condition) => (
+                    <option key={condition} value={condition}>{condition}</option>
                   ))}
                 </select>
               </label>
@@ -7414,11 +7489,18 @@ export default function App() {
     setEditingInvoice(null);
     setView("registrations");
   };
-  const blockedPeriodMessage = (period: string) =>
-    `A competência ${periodLabel(period)} está fechada. Desbloqueie a competência em Fechamentos antes de alterar lançamentos desse período.`;
-  const ensurePeriodOpen = (period: string) => {
-    if (!isPeriodClosed(period)) return true;
-    window.alert(blockedPeriodMessage(period));
+  const blockedFiscalPeriodMessage = (period: string) =>
+    `A competência fiscal ${periodLabel(period)} está fechada. Desbloqueie o fechamento fiscal antes de alterar documentos desse período.`;
+  const blockedFinancialPeriodMessage = (period: string) =>
+    `A competência financeira ${periodLabel(period)} está fechada. Desbloqueie o fechamento financeiro antes de alterar baixas ou conciliações desse período.`;
+  const ensureFiscalPeriodOpen = (period: string) => {
+    if (!isFiscalPeriodClosed(period)) return true;
+    window.alert(blockedFiscalPeriodMessage(period));
+    return false;
+  };
+  const ensureFinancialPeriodOpen = (period: string) => {
+    if (!isFinancialPeriodClosed(period)) return true;
+    window.alert(blockedFinancialPeriodMessage(period));
     return false;
   };
   const guardedSaveInvoice = async (invoice: Invoice) => {
@@ -7426,21 +7508,22 @@ export default function App() {
     const invoiceDataChanged = previous && invoiceDataSnapshot(previous) !== invoiceDataSnapshot(invoice);
     if (previous && !invoiceDataChanged) {
       const previousById = new Map(invoiceInstallments(previous).map((installment) => [installment.id, installment]));
-      const changedInstallments = invoiceInstallments(invoice).filter((installment) =>
-        JSON.stringify(previousById.get(installment.id)) !== JSON.stringify(installment),
-      );
+      const nextById = new Map(invoiceInstallments(invoice).map((installment) => [installment.id, installment]));
+      const changedIds = new Set([...previousById.keys(), ...nextById.keys()]);
       const financialPeriods = new Set<string>();
-      changedInstallments.forEach((installment) => {
-        const prior = previousById.get(installment.id);
-        [installment.dueDate, installment.paymentDate, installment.pfPaymentDate, prior?.dueDate, prior?.paymentDate, prior?.pfPaymentDate]
+      changedIds.forEach((id) => {
+        const prior = previousById.get(id);
+        const installment = nextById.get(id);
+        if (JSON.stringify(prior) === JSON.stringify(installment)) return;
+        [installment?.paymentDate, installment?.pfPaymentDate, prior?.paymentDate, prior?.pfPaymentDate]
           .filter(Boolean)
           .forEach((date) => financialPeriods.add(String(date).slice(0, 7)));
       });
-      if (![...financialPeriods].every(ensurePeriodOpen)) return false;
+      if (![...financialPeriods].every(ensureFinancialPeriodOpen)) return false;
     } else {
       const periods = new Set([invoicePeriodKey(invoice)]);
       if (previous) periods.add(invoicePeriodKey(previous));
-      if (![...periods].every(ensurePeriodOpen)) return false;
+      if (![...periods].every(ensureFiscalPeriodOpen)) return false;
     }
     if (previous && invoiceHasPostedPayments(previous) && invoiceDataChanged) {
       window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de alterar a nota.");
@@ -7450,7 +7533,7 @@ export default function App() {
   };
   const guardedDeleteInvoice = (id: string) => {
     const invoice = store.invoices.find((item) => item.id === id);
-    if (invoice && !ensurePeriodOpen(invoicePeriodKey(invoice))) return;
+    if (invoice && !ensureFiscalPeriodOpen(invoicePeriodKey(invoice))) return;
     if (invoice && invoiceHasPostedPayments(invoice)) {
       window.alert("Esta nota possui pagamento/recebimento lançado. Remova a baixa na tela Financeiro antes de excluir a nota.");
       return;
@@ -7461,40 +7544,56 @@ export default function App() {
     const periods = new Set([operationPeriodKey(operation)]);
     const previous = store.linkedOperations.find((item) => item.id === operation.id);
     if (previous) periods.add(operationPeriodKey(previous));
-    if (![...periods].every(ensurePeriodOpen)) return false;
+    if (![...periods].every(ensureFiscalPeriodOpen)) return false;
     return store.saveLinkedOperation(operation);
   };
   const guardedDeleteLinkedOperation = (id: string) => {
     const operation = store.linkedOperations.find((item) => item.id === id);
-    if (operation && !ensurePeriodOpen(operationPeriodKey(operation))) return;
+    if (operation && !ensureFiscalPeriodOpen(operationPeriodKey(operation))) return;
     store.deleteLinkedOperation(id);
   };
-  const togglePeriodLock = async (period: string, close: boolean) => {
+  const togglePeriodLock = async (period: string, close: boolean, kind: "fiscal" | "financial") => {
     if (!period) return;
-    if (close) {
+    if (close && kind === "fiscal") {
       const periodInvoices = store.invoices.filter((invoice) => invoicePeriodKey(invoice) === period);
       const financialInvoices = periodInvoices.filter(invoiceHasFinancialEffect);
       const pendingCount =
         financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
         periodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length +
-        periodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length +
-        financialInvoices.filter((invoice) => !invoiceHasHolder(invoice)).length;
-      if (pendingCount && !window.confirm(`Ainda existem ${pendingCount} pendência(s) na conferência de ${periodLabel(period)}. Deseja fechar mesmo assim?`)) return;
+        periodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
+      if (pendingCount && !window.confirm(`Ainda existem ${pendingCount} pendência(s) fiscais na conferência de ${periodLabel(period)}. Deseja fechar mesmo assim?`)) return;
     }
+    const scope = kind === "fiscal" ? "fiscal" : "financeira";
+    const effect = kind === "fiscal"
+      ? "notas, faturas e operações pela data de emissão ou entrada"
+      : "baixas e conciliações pela data efetiva do pagamento ou recebimento";
     const message = close
-      ? `Tem certeza que deseja fechar a competência ${periodLabel(period)}? Os lançamentos desse período ficarão bloqueados para alteração.`
-      : `Tem certeza que deseja desbloquear a competência ${periodLabel(period)}?`;
+      ? `Tem certeza que deseja fechar a competência ${scope} ${periodLabel(period)}? Serão bloqueadas alterações em ${effect}.`
+      : `Tem certeza que deseja desbloquear a competência ${scope} ${periodLabel(period)}?`;
     if (!window.confirm(message)) return;
 
-    const previousClosedPeriods = { ...(fiscalConfig.closedPeriods || {}) };
+    const source = kind === "fiscal"
+      ? fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}
+      : fiscalConfig.financialClosedPeriods || {};
+    const previousClosedPeriods = { ...source };
     const nextClosedPeriods = { ...previousClosedPeriods };
     if (close) nextClosedPeriods[period] = todayIso();
     else delete nextClosedPeriods[period];
-    fiscalConfig.closedPeriods = nextClosedPeriods;
+    if (kind === "fiscal") {
+      fiscalConfig.fiscalClosedPeriods = nextClosedPeriods;
+      fiscalConfig.closedPeriods = { ...nextClosedPeriods };
+    } else {
+      fiscalConfig.financialClosedPeriods = nextClosedPeriods;
+    }
     setConfigVersion((current) => current + 1);
     const saved = await saveFiscalConfig();
     if (!saved) {
-      fiscalConfig.closedPeriods = previousClosedPeriods;
+      if (kind === "fiscal") {
+        fiscalConfig.fiscalClosedPeriods = previousClosedPeriods;
+        fiscalConfig.closedPeriods = { ...previousClosedPeriods };
+      } else {
+        fiscalConfig.financialClosedPeriods = previousClosedPeriods;
+      }
       setConfigVersion((current) => current + 1);
     }
   };
@@ -7715,7 +7814,7 @@ export default function App() {
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "issued" ? editingInvoice : null}
               viewOnly={Boolean(editingInvoice) && recordMode === "view"}
-              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
+              canEdit={canEdit && (!editingInvoice || (!isFiscalPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               onEdit={() => setRecordMode("edit")}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
@@ -7737,7 +7836,7 @@ export default function App() {
               products={store.products}
               editingInvoice={editingInvoice?.invoiceType === "received" ? editingInvoice : null}
               viewOnly={Boolean(editingInvoice) && recordMode === "view"}
-              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
+              canEdit={canEdit && (!editingInvoice || (!isFiscalPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               onEdit={() => setRecordMode("edit")}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}
@@ -7753,8 +7852,15 @@ export default function App() {
           {view === "linked" && <LinkedOperationsView operations={store.linkedOperations} onSave={guardedSaveLinkedOperation} onDelete={guardedDeleteLinkedOperation} canEdit={canEdit} />}
           {view === "search" && <SearchView invoices={store.invoices} operations={store.linkedOperations} />}
           {view === "conference" && <ConferenceView invoices={store.invoices} onOpen={openInvoiceForm} />}
-          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} />}
-          {view === "closures" && <ClosuresView invoices={store.invoices} closedPeriods={fiscalConfig.closedPeriods || {}} onTogglePeriodLock={togglePeriodLock} />}
+          {view === "tax" && <TaxView totals={store.totals} invoices={store.invoices} fiscalClosedPeriods={fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}} />}
+          {view === "closures" && (
+            <ClosuresView
+              invoices={store.invoices}
+              fiscalClosedPeriods={fiscalConfig.fiscalClosedPeriods || fiscalConfig.closedPeriods || {}}
+              financialClosedPeriods={fiscalConfig.financialClosedPeriods || {}}
+              onTogglePeriodLock={togglePeriodLock}
+            />
+          )}
           {view === "financial-receivable" && (
             <FinancialView
               invoices={store.invoices}
@@ -7810,7 +7916,7 @@ export default function App() {
               invoices={store.invoices}
               editingBill={editingInvoice && isBillInvoice(editingInvoice) ? editingInvoice : null}
               viewOnly={Boolean(editingInvoice) && recordMode === "view"}
-              canEdit={canEdit && (!editingInvoice || (!isPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
+              canEdit={canEdit && (!editingInvoice || (!isFiscalPeriodClosed(invoicePeriodKey(editingInvoice)) && !invoiceHasPostedPayments(editingInvoice)))}
               parties={registryParties}
               onSave={guardedSaveInvoice}
               onDelete={guardedDeleteInvoice}

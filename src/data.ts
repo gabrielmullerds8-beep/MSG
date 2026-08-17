@@ -24,6 +24,8 @@ export const fiscalConfig: FiscalConfig = {
   cfemRate: 2,
   bankBalance: 0,
   closedPeriods: {},
+  fiscalClosedPeriods: {},
+  financialClosedPeriods: {},
   cfops: [
     "5101 - Venda de produção do estabelecimento",
     "5119 - Venda a ordem",

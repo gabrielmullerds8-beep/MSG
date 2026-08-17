@@ -220,7 +220,10 @@ export interface FiscalConfig {
   cofinsRate: number;
   cfemRate: number;
   bankBalance?: number;
+  /** Compatibilidade com versões anteriores; equivale ao fechamento fiscal. */
   closedPeriods?: Record<string, string>;
+  fiscalClosedPeriods?: Record<string, string>;
+  financialClosedPeriods?: Record<string, string>;
   cfops: string[];
   cfopRules?: Record<string, CfopRule>;
   csts: string[];
