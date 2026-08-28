@@ -54,6 +54,7 @@ import {
   invoiceConsidersCost,
   invoiceConsidersSale,
   invoiceHasFinancialEffect,
+  isCfemApplicableCfop,
   isNonFinancialRemittanceCfop,
   newId,
   todayIso,
@@ -813,6 +814,7 @@ function makeItem(
   const ibsEnabled = form.get(`ibsEnabled${suffix}`) === "on";
   const cbsEnabled = form.get(`cbsEnabled${suffix}`) === "on";
   const issqnEnabled = !isFreightDocument && form.get(`issqnEnabled${suffix}`) === "on";
+  const cfemEnabled = invoiceType === "issued" && isCfemApplicableCfop(mainCfop) && form.get(`cfemEnabled${suffix}`) === "on";
   const icmsRate = icmsEnabled ? cleanNumber(form.get(`icmsRate${suffix}`)) : 0;
   const icmsBase = icmsEnabled ? cleanNumber(form.get(`icmsBase${suffix}`)) || itemTaxBase : 0;
   const icmsValue = icmsEnabled ? cleanNumber(form.get(`icmsValue${suffix}`)) || (icmsBase * icmsRate) / 100 : 0;
@@ -834,7 +836,12 @@ function makeItem(
   const issqnRate = issqnEnabled ? cleanNumber(form.get(`issqnRate${suffix}`)) : 0;
   const issqnBase = issqnEnabled ? cleanNumber(form.get(`issqnBase${suffix}`)) || itemTaxBase : 0;
   const issqnValue = issqnEnabled ? cleanNumber(form.get(`issqnValue${suffix}`)) || (issqnBase * issqnRate) / 100 : 0;
-  const cfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
+  const automaticCfemBase = Math.max(totalValue - icmsValue - pisValue - cofinsValue, 0);
+  const cfemBase = cfemEnabled ? cleanNumber(form.get(`cfemBase${suffix}`)) || automaticCfemBase : 0;
+  const cfemRate = cfemEnabled ? cleanNumber(form.get(`cfemRate${suffix}`)) : 0;
+  const cfemValue = cfemEnabled
+    ? cleanNumber(form.get(`cfemValue${suffix}`)) || (cfemBase * cfemRate) / 100
+    : 0;
 
   return {
     id: newId("item"),
@@ -881,8 +888,9 @@ function makeItem(
     issqnRate,
     issqnValue,
     issqnRetained: issqnEnabled && form.get(`issqnRetained${suffix}`) === "on",
-    cfemRate: invoiceType === "issued" ? fiscalConfig.cfemRate : 0,
-    cfemValue: invoiceType === "issued" ? cfemBase * (fiscalConfig.cfemRate / 100) : 0,
+    cfemBase,
+    cfemRate,
+    cfemValue,
     materialType: String(form.get(`materialType${suffix}`) || ""),
     blockNumber: String(form.get(`blockNumber${suffix}`) || ""),
     blockColor: String(form.get(`blockColor${suffix}`) || ""),
@@ -2485,6 +2493,7 @@ function InvoiceForm({
   const isFreightDocument = isReceived && documentModel === "CT-e";
   const isNonProductDocument = isServiceReceived || isFreightDocument;
   const isSimpleRemittance = isNonFinancialRemittanceCfop(selectedMainCfop);
+  const cfemApplicable = !isReceived && isCfemApplicableCfop(selectedMainCfop);
   const existingIssqnRetention = editingInvoice?.items?.reduce(
     (total, item) => total + (item.issqnRetained ? Number(item.issqnValue || 0) : 0),
     0,
@@ -2530,6 +2539,7 @@ function InvoiceForm({
     ipi: initialIpiTotal,
     ibs: editingInvoice?.items?.reduce((total, item) => total + Number(item.ibsValue || 0), 0) || 0,
     cbs: editingInvoice?.items?.reduce((total, item) => total + Number(item.cbsValue || 0), 0) || 0,
+    cfem: editingInvoice?.items?.reduce((total, item) => total + Number(item.cfemValue || 0), 0) || editingInvoice?.cfemValue || 0,
     issqn: editingInvoice?.items?.reduce((total, item) => total + Number(item.issqnValue || 0), 0) || 0,
     retention: editingInvoice?.retentionValue || 0,
     net: initialNetTotal,
@@ -2587,6 +2597,7 @@ function InvoiceForm({
     let ipi = 0;
     let ibs = 0;
     let cbs = 0;
+    let cfem = 0;
     let issqn = 0;
     let retainedIssqn = 0;
 
@@ -2624,6 +2635,9 @@ function InvoiceForm({
       const cbsBaseField = form.elements.namedItem(`cbsBase${suffix}`) as HTMLInputElement | null;
       const cbsRateField = form.elements.namedItem(`cbsRate${suffix}`) as HTMLInputElement | null;
       const cbsValueField = form.elements.namedItem(`cbsValue${suffix}`) as HTMLInputElement | null;
+      const cfemBaseField = form.elements.namedItem(`cfemBase${suffix}`) as HTMLInputElement | null;
+      const cfemRateField = form.elements.namedItem(`cfemRate${suffix}`) as HTMLInputElement | null;
+      const cfemValueField = form.elements.namedItem(`cfemValue${suffix}`) as HTMLInputElement | null;
       const issqnBaseField = form.elements.namedItem(`issqnBase${suffix}`) as HTMLInputElement | null;
       const issqnRateField = form.elements.namedItem(`issqnRate${suffix}`) as HTMLInputElement | null;
       const issqnValueField = form.elements.namedItem(`issqnValue${suffix}`) as HTMLInputElement | null;
@@ -2632,11 +2646,12 @@ function InvoiceForm({
         baseField: HTMLInputElement | null,
         rateField: HTMLInputElement | null,
         valueField: HTMLInputElement | null,
+        automaticBase = taxBase,
       ) => {
         const enabled = formData.get(`${enabledName}${suffix}`) === "on";
         const baseWasEdited = baseField?.dataset.userEdited === "true";
         const valueWasEdited = valueField?.dataset.userEdited === "true";
-        const base = enabled ? (baseWasEdited ? cleanNumber(baseField?.value || null) : taxBase) : 0;
+        const base = enabled ? (baseWasEdited ? cleanNumber(baseField?.value || null) : automaticBase) : 0;
         if (baseField && (!baseWasEdited || !enabled)) baseField.value = formatCurrency(base);
         const driver = valueField?.dataset.taxDriver || rateField?.dataset.taxDriver || (valueWasEdited ? "value" : "rate");
         let rate = enabled ? cleanNumber(rateField?.value || null) : 0;
@@ -2665,12 +2680,14 @@ function InvoiceForm({
       discounts += cleanNumber(discountValueField?.value || null);
       freightItems += cleanNumber(itemFreightValueField?.value || null);
       const taxBase = totalValue;
-      updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
-      updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
-      updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField);
+      const itemIcms = updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
+      const itemPis = updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
+      const itemCofins = updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField);
       updateTaxFields("ipiEnabled", ipiBaseField, ipiRateField, ipiValueField);
       updateTaxFields("ibsEnabled", ibsBaseField, ibsRateField, ibsValueField);
       updateTaxFields("cbsEnabled", cbsBaseField, cbsRateField, cbsValueField);
+      const automaticCfemBase = Math.max(totalValue - itemIcms - itemPis - itemCofins, 0);
+      const itemCfem = updateTaxFields("cfemEnabled", cfemBaseField, cfemRateField, cfemValueField, automaticCfemBase);
       updateTaxFields("issqnEnabled", issqnBaseField, issqnRateField, issqnValueField);
       icms += cleanNumber(icmsValueField?.value || null);
       pis += cleanNumber(pisValueField?.value || null);
@@ -2678,6 +2695,7 @@ function InvoiceForm({
       ipi += cleanNumber(ipiValueField?.value || null);
       ibs += cleanNumber(ibsValueField?.value || null);
       cbs += cleanNumber(cbsValueField?.value || null);
+      cfem += itemCfem;
       const itemIssqn = cleanNumber(issqnValueField?.value || null);
       issqn += itemIssqn;
       if (formData.get(`issqnRetained${suffix}`) === "on") retainedIssqn += itemIssqn;
@@ -2717,7 +2735,7 @@ function InvoiceForm({
       nextWarnings.push("Há item sem centro de custo.");
     }
     const hasEnabledTaxWithoutRate = itemIndexes.some((itemIndex) =>
-      ["icms", "pis", "cofins", "ipi", "ibs", "cbs", "issqn"].some((tax) => {
+      ["icms", "pis", "cofins", "ipi", "ibs", "cbs", "cfem", "issqn"].some((tax) => {
         const suffix = `_${itemIndex}`;
         return formData.get(`${tax}Enabled${suffix}`) === "on" && cleanNumber(formData.get(`${tax}Rate${suffix}`)) === 0;
       }),
@@ -2728,7 +2746,7 @@ function InvoiceForm({
       nextWarnings.push("A soma das parcelas está diferente do total líquido da nota.");
     }
     setFormWarnings(Array.from(new Set(nextWarnings)));
-    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, issqn, retention: retentionValue, net });
+    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, cfem, issqn, retention: retentionValue, net });
     setFinancePfTotal(
       installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
     );
@@ -2802,8 +2820,9 @@ function InvoiceForm({
     const cofinsValue = items.reduce((total, item) => total + item.cofinsValue, 0);
     const cofinsCreditValue = items.reduce((total, item) => total + (item.cofinsCreditable ? item.cofinsValue : 0), 0);
     const cofinsBase = items.reduce((total, item) => total + item.cofinsBase, 0);
-    const cfemBase = Math.max(totalInvoice - icmsValue - pisValue - cofinsValue, 0);
-    const cfemValue = isReceived ? 0 : cfemBase * (fiscalConfig.cfemRate / 100);
+    const cfemBase = items.reduce((total, item) => total + Number(item.cfemBase || 0), 0);
+    const cfemValue = items.reduce((total, item) => total + Number(item.cfemValue || 0), 0);
+    const cfemRate = cfemBase > 0 ? (cfemValue / cfemBase) * 100 : 0;
     const now = new Date().toISOString();
     const hasLinkedOperation = form.get("hasLinkedOperation") === "on";
     const linkedInvoiceNumberValue = normalizeNoteNumber(String(form.get("linkedInvoiceNumber") || ""));
@@ -2866,7 +2885,7 @@ function InvoiceForm({
       cofinsValue,
       cofinsCreditValue,
       cfemBase,
-      cfemRate: isReceived ? 0 : fiscalConfig.cfemRate,
+      cfemRate,
       cfemValue,
       taxBenefit: "",
       legalBasis: "",
@@ -3243,6 +3262,31 @@ function InvoiceForm({
                     creditDefault={existingItem?.cbsCreditable ?? true}
                     showCredit={isReceived}
                   />
+                  {cfemApplicable && (
+                    <TaxControl
+                      title="CFEM"
+                      enabledName={`cfemEnabled_${itemIndex}`}
+                      defaultChecked={
+                        taxIsEnabled(existingItem?.cfemBase, existingItem?.cfemValue, existingItem?.cfemRate) ||
+                        (!isEditing && cfemApplicable)
+                      }
+                      baseName={`cfemBase_${itemIndex}`}
+                      baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.cfemBase))}
+                      automaticBaseValue={Math.max(
+                        itemAutomaticTaxBase -
+                          Number(existingItem?.icmsValue || 0) -
+                          Number(existingItem?.pisValue || 0) -
+                          Number(existingItem?.cofinsValue || 0),
+                        0,
+                      )}
+                      rateName={`cfemRate_${itemIndex}`}
+                      rateValue={existingItem?.cfemRate || fiscalConfig.cfemRate}
+                      valueName={`cfemValue_${itemIndex}`}
+                      valueValue={formatCurrency(
+                        normalizeStoredTaxValue(existingItem?.cfemBase, existingItem?.cfemRate, existingItem?.cfemValue),
+                      )}
+                    />
+                  )}
                   {!isFreightDocument && (
                     <TaxControl
                       title="ISSQN"
@@ -3290,6 +3334,7 @@ function InvoiceForm({
           {!isNonProductDocument && <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />}
           <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
           <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
+          {cfemApplicable && <StatCard title="Total CFEM" value={formatCurrency(itemTotals.cfem)} tone="warn" />}
           {!isFreightDocument && <StatCard title="Total ISSQN" value={formatCurrency(itemTotals.issqn)} tone="warn" />}
           <StatCard title="Retenções" value={formatCurrency(itemTotals.retention)} tone="danger" />
           <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
@@ -3731,6 +3776,9 @@ function TaxView({
   });
   const issuedTaxable = periodInvoices.filter(invoiceConsidersSale);
   const receivedTaxable = periodInvoices.filter(invoiceConsidersCost);
+  const cfemInvoices = periodInvoices.filter(
+    (invoice) => invoice.invoiceType === "issued" && isCfemApplicableCfop(invoice.mainCfop),
+  );
   const sumInvoices = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, invoice) => total + Number(invoice[field] || 0), 0);
   const buildRows = (items: Invoice[], selector: (invoice: Invoice) => number): TaxBreakdownRow[] =>
@@ -3751,14 +3799,50 @@ function TaxView({
   const receivedPis = sumInvoices(receivedTaxable, "pisCreditValue");
   const issuedCofins = sumInvoices(issuedTaxable, "cofinsValue");
   const receivedCofins = sumInvoices(receivedTaxable, "cofinsCreditValue");
-  const cfemBase = Math.max(issuedRevenue - issuedIcms - issuedPis - issuedCofins, 0);
-  const cfemDue = cfemBase * (fiscalConfig.cfemRate / 100);
+  const getInvoiceCfemBase = (invoice: Invoice) => {
+    const savedItemBase = invoice.items.reduce((total, item) => total + Number(item.cfemBase || 0), 0);
+    if (savedItemBase > 0) return savedItemBase;
+    if (Number(invoice.cfemBase || 0) > 0) return Number(invoice.cfemBase);
+    return invoice.items.reduce(
+      (total, item) =>
+        total +
+        Math.max(
+          Number(item.totalValue || 0) -
+            Number(item.icmsValue || 0) -
+            Number(item.pisValue || 0) -
+            Number(item.cofinsValue || 0),
+          0,
+        ),
+      0,
+    );
+  };
+  const getInvoiceCfemValue = (invoice: Invoice) => {
+    const savedItemValue = invoice.items.reduce((total, item) => total + Number(item.cfemValue || 0), 0);
+    if (savedItemValue > 0) return savedItemValue;
+    if (Number(invoice.cfemValue || 0) > 0) return Number(invoice.cfemValue);
+    const rate = Number(invoice.cfemRate || 0) || fiscalConfig.cfemRate;
+    return (getInvoiceCfemBase(invoice) * rate) / 100;
+  };
+  const cfemBase = cfemInvoices.reduce((total, invoice) => total + getInvoiceCfemBase(invoice), 0);
+  const cfemDue = cfemInvoices.reduce((total, invoice) => total + getInvoiceCfemValue(invoice), 0);
+  const cfemRates = Array.from(
+    new Set(
+      cfemInvoices.flatMap((invoice) => {
+        const itemRates = invoice.items
+          .filter((item) => Number(item.cfemBase || 0) > 0 || Number(item.cfemValue || 0) > 0)
+          .map((item) => Number(item.cfemRate || 0))
+          .filter((rate) => rate > 0);
+        const invoiceRate = Number(invoice.cfemRate || 0);
+        return itemRates.length ? itemRates : invoiceRate > 0 ? [invoiceRate] : [];
+      }),
+    ),
+  ).sort((a, b) => a - b);
   const retainedInvoices = periodInvoices.filter((invoice) => Number(invoice.retentionValue || 0) > 0);
   const retainedTaxes = sumInvoices(retainedInvoices, "retentionValue");
   const breakdowns: Record<string, TaxBreakdownRow[]> = {
     issuedRevenue: buildRows(issuedTaxable, (invoice) => invoice.totalInvoice),
     receivedRevenue: buildRows(receivedTaxable, (invoice) => invoice.totalInvoice),
-    cfemDue: buildRows(issuedTaxable, (invoice) => Math.max(invoice.totalInvoice - invoice.icmsValue - invoice.pisValue - invoice.cofinsValue, 0) * (fiscalConfig.cfemRate / 100)),
+    cfemDue: buildRows(cfemInvoices, getInvoiceCfemValue),
     issuedIcms: buildRows(issuedTaxable, (invoice) => invoice.icmsValue),
     receivedIcms: buildRows(receivedTaxable, (invoice) => invoice.icmsCreditValue),
     balanceIcms: [
@@ -3867,7 +3951,15 @@ function TaxView({
           <h2>CFEM</h2>
           <p className="summary-line">Receita tributável emitida: {formatCurrency(issuedRevenue)}</p>
           <p className="summary-line">Base CFEM: {formatCurrency(cfemBase)}</p>
-          <p className="summary-line">Alíquota CFEM: {fiscalConfig.cfemRate}%</p>
+          <p className="summary-line">
+            Alíquotas aplicadas:{" "}
+            {cfemRates.length
+              ? cfemRates
+                  .map((rate) => rate.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 4 }))
+                  .map((rate) => `${rate}%`)
+                  .join(", ")
+              : "Nenhuma"}
+          </p>
           <p className="summary-line">Valor a recolher: {formatCurrency(cfemDue)}</p>
         </section>
         <section className="panel tax-detail-card">

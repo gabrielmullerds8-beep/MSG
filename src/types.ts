@@ -55,6 +55,7 @@ export interface InvoiceItem {
   issqnRate?: number;
   issqnValue?: number;
   issqnRetained?: boolean;
+  cfemBase?: number;
   cfemRate: number;
   cfemValue: number;
   materialType?: string;

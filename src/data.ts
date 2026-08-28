@@ -122,10 +122,15 @@ export const fiscalConfig: FiscalConfig = {
 
 export const getCfopCode = (value: string) => String(value || "").split(" - ")[0].trim();
 
-const nonFinancialRemittanceCfops = new Set(["1949", "5949"]);
+const nonFinancialRemittanceCfops = new Set(["1949", "5949", "6949"]);
 
 export const isNonFinancialRemittanceCfop = (value: string) =>
   nonFinancialRemittanceCfops.has(getCfopCode(value));
+
+const cfemApplicableCfops = new Set(["5101", "6101", "6122", "5122"]);
+
+export const isCfemApplicableCfop = (value: string) =>
+  cfemApplicableCfops.has(getCfopCode(value));
 
 export const getCfopRule = (cfop: string): CfopRule => {
   const code = getCfopCode(cfop);

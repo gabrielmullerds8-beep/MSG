@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount } from "./data";
+import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount, isCfemApplicableCfop } from "./data";
 import { supabase } from "./supabase";
 import { assetToRow, cashMovementToRow, checkToRow, invoiceToRow, operationToRow, productToRow, rowToAsset, rowToCashMovement, rowToCheck, rowToInvoice, rowToOperation, rowToProduct } from "./services/supabaseMappers";
 import { AssetItem, CashMovement, CheckItem, Invoice, LinkedOperation, ProductItem } from "./types";
@@ -574,10 +574,32 @@ export function useFiscalStore() {
   const taxableReceived = received.filter(invoiceConsidersCost);
   const sum = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, item) => total + Number(item[field] || 0), 0);
-  const cfemDue = taxableIssued.reduce((total, invoice) => {
-    const base = invoice.totalInvoice - invoice.icmsValue - invoice.pisValue - invoice.cofinsValue;
-    return total + Math.max(base, 0) * 0.02;
-  }, 0);
+  const cfemDue = issued
+    .filter((invoice) => isCfemApplicableCfop(invoice.mainCfop))
+    .reduce((total, invoice) => {
+      const savedItemValue = invoice.items.reduce((sumValue, item) => sumValue + Number(item.cfemValue || 0), 0);
+      if (savedItemValue > 0) return total + savedItemValue;
+      if (Number(invoice.cfemValue || 0) > 0) return total + Number(invoice.cfemValue);
+
+      const itemBase = invoice.items.reduce((sumBase, item) => {
+        const savedBase = Number(item.cfemBase || 0);
+        return (
+          sumBase +
+          (savedBase > 0
+            ? savedBase
+            : Math.max(
+                Number(item.totalValue || 0) -
+                  Number(item.icmsValue || 0) -
+                  Number(item.pisValue || 0) -
+                  Number(item.cofinsValue || 0),
+                0,
+              ))
+        );
+      }, 0);
+      const base = itemBase || Number(invoice.cfemBase || 0);
+      const rate = Number(invoice.cfemRate || 0) || 2;
+      return total + (base * rate) / 100;
+    }, 0);
 
   const totals = {
     issued,
