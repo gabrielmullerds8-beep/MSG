@@ -22,6 +22,7 @@
   due_date date,
   pf_value numeric(14, 2) not null default 0,
   carrier_name text,
+  freight_due_date date,
   payment_date date,
   paid boolean not null default false,
   status text not null,
@@ -67,6 +68,9 @@ alter table public.invoices
 
 alter table public.invoices
   add column if not exists carrier_name text;
+
+alter table public.invoices
+  add column if not exists freight_due_date date;
 
 alter table public.invoices
   add column if not exists financial_installments jsonb not null default '[]'::jsonb;
@@ -174,7 +178,8 @@ create table if not exists public.assets (
   plate text,
   registration_number text,
   situation text not null default 'Próprio' check (situation in ('Próprio', 'Alugado', 'Vendido')),
-  status text check (status is null or status in ('Em uso', 'Locado', 'Empréstimo')),
+  status text check (status is null or status in ('Em uso', 'Manutenção', 'Locado', 'Empréstimo')),
+  mining_details jsonb not null default '{}'::jsonb,
   notes text,
   archived boolean not null default false,
   created_at timestamptz not null default now(),
@@ -184,6 +189,7 @@ create table if not exists public.assets (
 alter table public.assets
   add column if not exists situation text not null default 'Próprio',
   add column if not exists status text,
+  add column if not exists mining_details jsonb not null default '{}'::jsonb,
   add column if not exists notes text;
 
 update public.assets
@@ -202,7 +208,7 @@ begin
   end if;
   if not exists (select 1 from pg_constraint where conname = 'assets_status_check') then
     alter table public.assets add constraint assets_status_check
-      check (status is null or status in ('Em uso', 'Locado', 'Empréstimo'));
+      check (status is null or status in ('Em uso', 'Manutenção', 'Locado', 'Empréstimo'));
   end if;
   if not exists (select 1 from pg_constraint where conname = 'assets_sold_status_check') then
     alter table public.assets add constraint assets_sold_status_check

@@ -1526,13 +1526,23 @@ tr:last-child td {
   font-size: 15px;
 }
 
-.item-freight-demo {
-  display: contents;
+.item-freight-control {
+  display: grid;
+  gap: 8px;
+  align-content: start;
 }
 
-.item-freight-demo input {
+.item-freight-control .field input {
   background: #f8fafc;
   color: #475569;
+}
+
+.item-freight-inclusion {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
 }
 
 .tax-control-list {

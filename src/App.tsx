@@ -198,7 +198,7 @@ const operationTypeOptions = [
   "Compra com triangulação",
   "Conhecimento de frete",
 ];
-const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"];
+const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Direitos minerários", "Diversos"];
 const normalizeFiscalConfigLists = () => {
   const legacyConfig = fiscalConfig as FiscalConfig & { financialCategories?: string[] };
   fiscalConfig.cfops = sortConfigOptions(fiscalConfig.cfops);
@@ -806,6 +806,7 @@ function makeItem(
   const totalValue = cleanNumber(form.get(`totalValue${suffix}`)) || quantity * unitValue;
   const discountValue = cleanNumber(form.get(`discountValue${suffix}`));
   const freightValue = isNonProductDocument ? 0 : cleanNumber(form.get(`itemFreightValue${suffix}`));
+  const freightIncludedInTotal = freightValue > 0 && form.get(`itemFreightIncludedInTotal${suffix}`) === "on";
   const itemTaxBase = totalValue;
   const icmsEnabled = form.get(`icmsEnabled${suffix}`) === "on";
   const pisEnabled = form.get(`pisEnabled${suffix}`) === "on";
@@ -861,6 +862,7 @@ function makeItem(
     totalValue,
     discountValue,
     freightValue,
+    freightIncludedInTotal,
     icmsBase,
     icmsRate,
     icmsValue,
@@ -2518,10 +2520,14 @@ function InvoiceForm({
   );
   const initialItemDiscountTotal = editingInvoice?.items?.reduce((total, item) => total + Number(item.discountValue || 0), 0) || 0;
   const initialIpiTotal = editingInvoice?.items?.reduce((total, item) => total + Number(item.ipiValue || 0), 0) || 0;
+  const initialIncludedFreightTotal = editingInvoice?.items?.reduce(
+    (total, item) => total + (item.freightIncludedInTotal ? Number(item.freightValue || 0) : 0),
+    0,
+  ) || 0;
   const initialNetTotal = editingInvoice
     ? Math.max(
         Number(editingInvoice.totalProducts || 0) +
-          Number(editingInvoice.freightValue || 0) +
+          initialIncludedFreightTotal +
           initialIpiTotal -
           initialItemDiscountTotal -
           Number(editingInvoice.discountValue || 0) -
@@ -2533,6 +2539,7 @@ function InvoiceForm({
     products: editingInvoice?.totalProducts || 0,
     discounts: initialItemDiscountTotal || editingInvoice?.discountValue || 0,
     freightItems: editingInvoice?.items?.reduce((total, item) => total + Number(item.freightValue || 0), 0) || 0,
+    includedFreight: initialIncludedFreightTotal,
     icms: editingInvoice?.icmsValue || editingInvoice?.icmsCreditValue || 0,
     pis: editingInvoice?.pisValue || editingInvoice?.pisCreditValue || 0,
     cofins: editingInvoice?.cofinsValue || editingInvoice?.cofinsCreditValue || 0,
@@ -2568,6 +2575,7 @@ function InvoiceForm({
     setItemTotals((current) => ({
       ...current,
       freightItems: documentModel === "NF-e" ? current.freightItems : 0,
+      includedFreight: documentModel === "NF-e" ? current.includedFreight : 0,
       ipi: documentModel === "NF-e" ? current.ipi : 0,
       issqn: documentModel === "CT-e" ? 0 : current.issqn,
     }));
@@ -2591,6 +2599,7 @@ function InvoiceForm({
     let products = 0;
     let discounts = 0;
     let freightItems = 0;
+    let includedFreight = 0;
     let icms = 0;
     let pis = 0;
     let cofins = 0;
@@ -2678,7 +2687,9 @@ function InvoiceForm({
       const totalValue = cleanNumber(totalValueField?.value || null);
       products += totalValue;
       discounts += cleanNumber(discountValueField?.value || null);
-      freightItems += cleanNumber(itemFreightValueField?.value || null);
+      const itemFreightValue = cleanNumber(itemFreightValueField?.value || null);
+      freightItems += itemFreightValue;
+      if (formData.get(`itemFreightIncludedInTotal${suffix}`) === "on") includedFreight += itemFreightValue;
       const taxBase = totalValue;
       const itemIcms = updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
       const itemPis = updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
@@ -2700,11 +2711,10 @@ function InvoiceForm({
       issqn += itemIssqn;
       if (formData.get(`issqnRetained${suffix}`) === "on") retainedIssqn += itemIssqn;
     });
-    const freightValue = formData.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(formData.get("freightValue"));
     const discountValue = cleanNumber(formData.get("discountValue"));
     const manualRetentionValue = isServiceReceived && formData.get("retentionEnabled") === "on" ? cleanNumber(formData.get("retentionValue")) : 0;
     const retentionValue = manualRetentionValue + retainedIssqn;
-    const net = Math.max(products + freightValue + ipi - discounts - discountValue - retentionValue, 0);
+    const net = Math.max(products + includedFreight + ipi - discounts - discountValue - retentionValue, 0);
     const amountFields = installmentIndexes
       .map((index) => form.elements.namedItem(`installmentAmount_${index}`) as HTMLInputElement | null)
       .filter(Boolean) as HTMLInputElement[];
@@ -2746,7 +2756,7 @@ function InvoiceForm({
       nextWarnings.push("A soma das parcelas está diferente do total líquido da nota.");
     }
     setFormWarnings(Array.from(new Set(nextWarnings)));
-    setItemTotals({ products, discounts: discounts + discountValue, freightItems, icms, pis, cofins, ipi, ibs, cbs, cfem, issqn, retention: retentionValue, net });
+    setItemTotals({ products, discounts: discounts + discountValue, freightItems, includedFreight, icms, pis, cofins, ipi, ibs, cbs, cfem, issqn, retention: retentionValue, net });
     setFinancePfTotal(
       installmentIndexes.reduce((total, index) => total + cleanNumber(formData.get(`installmentPfValue_${index}`)), 0),
     );
@@ -2771,7 +2781,11 @@ function InvoiceForm({
     const items = itemIndexes.map((index) => makeItem(form, type, index, mainCfop, currentDocumentModel as ReceivedDocumentModel));
     const totalProducts = items.reduce((total, item) => total + item.totalValue, 0);
     const itemDiscountTotal = items.reduce((total, item) => total + Number(item.discountValue || 0), 0);
-    const freightValue = form.get("thirdPartyFreight") === "on" ? 0 : cleanNumber(form.get("freightValue"));
+    const includedFreight = items.reduce(
+      (total, item) => total + (item.freightIncludedInTotal ? Number(item.freightValue || 0) : 0),
+      0,
+    );
+    const freightValue = cleanNumber(form.get("freightValue"));
     const discountValue = cleanNumber(form.get("discountValue"));
     const manualRetentionValue = isServiceReceived && !isFreightDocument && form.get("retentionEnabled") === "on"
       ? cleanNumber(form.get("retentionValue"))
@@ -2789,7 +2803,7 @@ function InvoiceForm({
           ? "Retenções de impostos"
           : "";
     const ipiValue = items.reduce((total, item) => total + Number(item.ipiValue || 0), 0);
-    const totalInvoice = Math.max(totalProducts + freightValue + ipiValue - discountValue - itemDiscountTotal - retentionValue, 0);
+    const totalInvoice = Math.max(totalProducts + includedFreight + ipiValue - discountValue - itemDiscountTotal - retentionValue, 0);
     const rawInstallments = installmentIndexes.map((index, position) => ({
       id: editingInvoice?.financialInstallments?.[position]?.id || `parcela_${position + 1}`,
       paymentCondition: String(form.get(`paymentCondition_${index}`) || ""),
@@ -2864,6 +2878,7 @@ function InvoiceForm({
       dueDate: firstInstallment?.dueDate || "",
       pfValue: totalPfValue,
       carrierName: isFreightDocument ? "" : String(form.get("carrierName") || ""),
+      freightDueDate: form.get("thirdPartyFreight") === "on" ? "" : String(form.get("freightDueDate") || ""),
       paymentDate: editingInvoice?.paymentDate || "",
       paid: Boolean(editingInvoice?.paid),
       status: String(form.get("status") || "Faturada") as Invoice["status"],
@@ -3167,8 +3182,16 @@ function InvoiceForm({
                 <MoneyField label="Valor total" name={`totalValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.totalValue || 0)} autoCalc />
                 <MoneyField label="Desconto do item" name={`discountValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.discountValue || 0)} autoCalc />
                 {!isNonProductDocument && (
-                  <div className="item-freight-demo">
-                    <MoneyField label="Frete do item (demonstrativo)" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
+                  <div className="item-freight-control">
+                    <MoneyField label="Frete do item" name={`itemFreightValue_${itemIndex}`} defaultValue={formatCurrency(existingItem?.freightValue || 0)} autoCalc />
+                    <label className="check item-freight-inclusion">
+                      <input
+                        name={`itemFreightIncludedInTotal_${itemIndex}`}
+                        type="checkbox"
+                        defaultChecked={Boolean(existingItem?.freightIncludedInTotal)}
+                      />
+                      Incluir no total do item e da nota
+                    </label>
                   </div>
                 )}
                 <div className="subsection-label">Impostos</div>
@@ -3327,7 +3350,10 @@ function InvoiceForm({
         <div className="item-totals-grid">
           <StatCard title="Total produtos" value={formatCurrency(itemTotals.products)} tone="info" />
           <StatCard title="Descontos" value={formatCurrency(itemTotals.discounts)} tone="danger" />
-          {!isNonProductDocument && <StatCard title="Frete por item" value={formatCurrency(itemTotals.freightItems)} tone="warn" />}
+          {!isNonProductDocument && <StatCard title="Frete integrado" value={formatCurrency(itemTotals.includedFreight)} tone="info" />}
+          {!isNonProductDocument && itemTotals.freightItems > itemTotals.includedFreight && (
+            <StatCard title="Frete informativo" value={formatCurrency(itemTotals.freightItems - itemTotals.includedFreight)} tone="warn" />
+          )}
           <StatCard title="Total ICMS" value={formatCurrency(itemTotals.icms)} tone="danger" />
           <StatCard title="Total PIS" value={formatCurrency(itemTotals.pis)} tone="warn" />
           <StatCard title="Total COFINS" value={formatCurrency(itemTotals.cofins)} tone="warn" />
@@ -3381,13 +3407,13 @@ function InvoiceForm({
       <section className={isFreightDocument ? "view-stack" : "split-grid"}>
         {!isNonProductDocument && (
           <section className="panel">
-            <h2>Transporte</h2>
+            <h2>Transporte informativo</h2>
             <label className="check transport-third-party">
               <input name="thirdPartyFreight" type="checkbox" checked={thirdPartyFreight} onChange={(event) => setThirdPartyFreight(event.target.checked)} />
               Frete por conta de terceiros
             </label>
             <div className="form-grid compact">
-              <MoneyField label="Valor frete" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
+              <MoneyField label="Valor do frete logístico" name="freightValue" defaultValue={formatCurrency(editingInvoice?.freightValue || 0)} />
               <PartySelect
                 label="Transportadora"
                 name="carrierId"
@@ -3398,7 +3424,14 @@ function InvoiceForm({
                 onAdd={onAddParty}
               />
               <input name="carrierName" type="hidden" value={selectedCarrier?.name || editingInvoice?.carrierName || ""} readOnly />
-              {!thirdPartyFreight && <Field label="Vencimento" name="freightDueDate" type="date" />}
+              {!thirdPartyFreight && (
+                <Field
+                  label="Vencimento"
+                  name="freightDueDate"
+                  type="date"
+                  defaultValue={editingInvoice?.freightDueDate || ""}
+                />
+              )}
             </div>
           </section>
         )}
@@ -3776,8 +3809,8 @@ function TaxView({
   });
   const issuedTaxable = periodInvoices.filter(invoiceConsidersSale);
   const receivedTaxable = periodInvoices.filter(invoiceConsidersCost);
-  const cfemInvoices = periodInvoices.filter(
-    (invoice) => invoice.invoiceType === "issued" && isCfemApplicableCfop(invoice.mainCfop),
+  const cfemInvoices = issuedTaxable.filter(
+    (invoice) => isCfemApplicableCfop(invoice.mainCfop),
   );
   const sumInvoices = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, invoice) => total + Number(invoice[field] || 0), 0);
@@ -6063,6 +6096,18 @@ function AssetsView({
       registrationNumber: registrationKinds.length && registrationNumber ? `${registrationKinds.join(" / ")}: ${registrationNumber}` : registrationNumber,
       situation,
       status: situation === "Vendido" ? undefined : String(form.get("status") || "Em uso") as AssetItem["status"],
+      miningDetails: String(form.get("itemType") || "") === "Direitos minerários" ? {
+        processNumber: String(form.get("miningProcessNumber") || "").trim(),
+        holder: String(form.get("miningHolder") || "").trim(),
+        mineralSubstances: String(form.get("mineralSubstances") || "").trim(),
+        regime: String(form.get("miningRegime") || "").trim(),
+        phase: String(form.get("miningPhase") || "").trim(),
+        areaHectares: cleanQuantity(form.get("miningAreaHectares")),
+        municipality: String(form.get("miningMunicipality") || "").trim(),
+        state: String(form.get("miningState") || "").trim().toUpperCase(),
+        titleNumber: String(form.get("miningTitleNumber") || "").trim(),
+        expirationDate: String(form.get("miningExpirationDate") || ""),
+      } : undefined,
       notes: String(form.get("notes") || "").trim(),
       archived: situation === "Vendido",
       createdAt: editingAsset?.createdAt || now,
@@ -6120,6 +6165,19 @@ function AssetsView({
               <div><span>Valor de aquisição</span><strong>{formatCurrency(viewingAsset.acquisitionValue)}</strong></div>
               {viewingAsset.plate && <div><span>Placa</span><strong>{viewingAsset.plate}</strong></div>}
               {viewingAsset.registrationNumber && <div><span>Matrícula, escritura ou CCIR</span><strong>{viewingAsset.registrationNumber}</strong></div>}
+              {viewingAsset.itemType === "Direitos minerários" && (
+                <>
+                  <div><span>Processo ANM</span><strong>{viewingAsset.miningDetails?.processNumber || "Não informado"}</strong></div>
+                  <div><span>Titular do direito</span><strong>{viewingAsset.miningDetails?.holder || "Não informado"}</strong></div>
+                  <div><span>Substância mineral</span><strong>{viewingAsset.miningDetails?.mineralSubstances || "Não informada"}</strong></div>
+                  <div><span>Regime de aproveitamento</span><strong>{viewingAsset.miningDetails?.regime || "Não informado"}</strong></div>
+                  <div><span>Fase do processo</span><strong>{viewingAsset.miningDetails?.phase || "Não informada"}</strong></div>
+                  <div><span>Área</span><strong>{viewingAsset.miningDetails?.areaHectares ? `${formatQuantityInput(viewingAsset.miningDetails.areaHectares)} ha` : "Não informada"}</strong></div>
+                  <div><span>Município / UF</span><strong>{[viewingAsset.miningDetails?.municipality, viewingAsset.miningDetails?.state].filter(Boolean).join(" / ") || "Não informado"}</strong></div>
+                  <div><span>Título / alvará</span><strong>{viewingAsset.miningDetails?.titleNumber || "Não informado"}</strong></div>
+                  <div><span>Validade do título</span><strong>{viewingAsset.miningDetails?.expirationDate ? formatDate(viewingAsset.miningDetails.expirationDate) : "Não informada"}</strong></div>
+                </>
+              )}
               <div className="wide"><span>Observações</span><strong>{viewingAsset.notes || "Nenhuma observação informada."}</strong></div>
             </div>
             <div className="form-actions inline">
@@ -6157,23 +6215,39 @@ function AssetsView({
               <label className="field">
                 <span>Status</span>
                 <select name="status" defaultValue={editingAsset?.status || "Em uso"}>
-                  {(["Em uso", "Locado", "Empréstimo"] as NonNullable<AssetItem["status"]>[]).map((option) => <option key={option}>{option}</option>)}
+                  {(["Em uso", "Manutenção", "Locado", "Empréstimo"] as NonNullable<AssetItem["status"]>[]).map((option) => <option key={option}>{option}</option>)}
                 </select>
               </label>
             )}
             {assetTypesWithPlate.has(selectedAssetType) && <Field label="Placa" name="plate" defaultValue={editingAsset?.plate || ""} />}
-            <label className="field registration-field">
-              <span>Número da matrícula, escritura ou CCIR</span>
-              <input name="registrationNumber" defaultValue={editingAsset?.registrationNumber?.replace(/^(Matrícula|Escritura|CCIR)( \/ (Matrícula|Escritura|CCIR))*: /, "") || ""} />
-              <div className="mini-check-row">
-                {["Matrícula", "Escritura", "CCIR"].map((kind) => (
-                  <label key={kind}>
-                    <input name={`registration${kind}`} type="checkbox" defaultChecked={editingAsset?.registrationNumber?.includes(kind)} />
-                    {kind}
-                  </label>
-                ))}
-              </div>
-            </label>
+            {selectedAssetType === "Direitos minerários" ? (
+              <>
+                <div className="subsection-label">Especificações do direito minerário</div>
+                <Field label="Número do processo ANM" name="miningProcessNumber" defaultValue={editingAsset?.miningDetails?.processNumber || ""} required />
+                <Field label="Titular do direito" name="miningHolder" defaultValue={editingAsset?.miningDetails?.holder || ""} required />
+                <Field label="Substância mineral" name="mineralSubstances" defaultValue={editingAsset?.miningDetails?.mineralSubstances || ""} required />
+                <Field label="Regime de aproveitamento" name="miningRegime" defaultValue={editingAsset?.miningDetails?.regime || ""} />
+                <Field label="Fase do processo" name="miningPhase" defaultValue={editingAsset?.miningDetails?.phase || ""} />
+                <Field label="Área (ha)" name="miningAreaHectares" defaultValue={editingAsset?.miningDetails?.areaHectares ? formatQuantityInput(editingAsset.miningDetails.areaHectares) : ""} inputMode="decimal" sanitize="decimal" />
+                <Field label="Município" name="miningMunicipality" defaultValue={editingAsset?.miningDetails?.municipality || ""} />
+                <Field label="UF" name="miningState" defaultValue={editingAsset?.miningDetails?.state || ""} maxLength={2} sanitize="letters" />
+                <Field label="Número do título / alvará" name="miningTitleNumber" defaultValue={editingAsset?.miningDetails?.titleNumber || ""} />
+                <Field label="Validade do título" name="miningExpirationDate" type="date" defaultValue={editingAsset?.miningDetails?.expirationDate || ""} />
+              </>
+            ) : (
+              <label className="field registration-field">
+                <span>Número da matrícula, escritura ou CCIR</span>
+                <input name="registrationNumber" defaultValue={editingAsset?.registrationNumber?.replace(/^(Matrícula|Escritura|CCIR)( \/ (Matrícula|Escritura|CCIR))*: /, "") || ""} />
+                <div className="mini-check-row">
+                  {["Matrícula", "Escritura", "CCIR"].map((kind) => (
+                    <label key={kind}>
+                      <input name={`registration${kind}`} type="checkbox" defaultChecked={editingAsset?.registrationNumber?.includes(kind)} />
+                      {kind}
+                    </label>
+                  ))}
+                </div>
+              </label>
+            )}
             <label className="field span-4 asset-notes-field">
               <span>Observações</span>
               <textarea name="notes" defaultValue={editingAsset?.notes || ""} placeholder="Informações complementares sobre o patrimônio" />

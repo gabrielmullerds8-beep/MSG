@@ -37,6 +37,7 @@ export const invoiceToRow = (invoice: Invoice) => ({
   due_date: invoice.dueDate || null,
   pf_value: invoice.pfValue || 0,
   carrier_name: invoice.carrierName || null,
+  freight_due_date: invoice.freightDueDate || null,
   payment_date: invoice.paymentDate || null,
   paid: invoice.paid,
   status: invoice.status,
@@ -101,6 +102,7 @@ export const rowToInvoice = (row: Record<string, any>): Invoice => ({
   dueDate: row.due_date || undefined,
   pfValue: finiteNumber(row.pf_value),
   carrierName: row.carrier_name || undefined,
+  freightDueDate: row.freight_due_date || undefined,
   paymentDate: row.payment_date || undefined,
   paid: Boolean(row.paid),
   status: normalizeInvoiceStatus(row.status),
@@ -201,6 +203,7 @@ export const assetToRow = (asset: AssetItem) => ({
   registration_number: asset.registrationNumber || null,
   situation: asset.situation,
   status: asset.situation === "Vendido" ? null : asset.status || null,
+  mining_details: asset.itemType === "Direitos minerários" ? asset.miningDetails || {} : {},
   notes: asset.notes || null,
   archived: asset.archived,
   created_at: asset.createdAt,
@@ -217,6 +220,9 @@ export const rowToAsset = (row: Record<string, any>): AssetItem => ({
   registrationNumber: row.registration_number || undefined,
   situation: row.situation || (row.archived ? "Vendido" : "Próprio"),
   status: row.situation === "Vendido" || (row.archived && !row.situation) ? undefined : row.status || "Em uso",
+  miningDetails: row.item_type === "Direitos minerários" && row.mining_details && typeof row.mining_details === "object"
+    ? row.mining_details
+    : undefined,
   notes: row.notes || undefined,
   archived: Boolean(row.archived),
   createdAt: row.created_at,

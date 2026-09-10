@@ -117,12 +117,12 @@ export const fiscalConfig: FiscalConfig = {
   paymentConditions: ["a prazo", "à vista", "sem pagamento"],
   paymentMethods: ["boleto", "depósito bancário", "pix", "dinheiro", "cheque", "cartão"],
   holders: ["Itaú", "Sicredi", "Itaú Mailson"],
-  assetTypes: ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Diversos"],
+  assetTypes: ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Direitos minerários", "Diversos"],
 };
 
 export const getCfopCode = (value: string) => String(value || "").split(" - ")[0].trim();
 
-const nonFinancialRemittanceCfops = new Set(["1949", "5949", "6949"]);
+const nonFinancialRemittanceCfops = new Set(["1949", "2949", "5949", "6949"]);
 
 export const isNonFinancialRemittanceCfop = (value: string) =>
   nonFinancialRemittanceCfops.has(getCfopCode(value));

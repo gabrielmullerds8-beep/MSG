@@ -28,6 +28,7 @@ export interface InvoiceItem {
   totalValue: number;
   discountValue?: number;
   freightValue?: number;
+  freightIncludedInTotal?: boolean;
   icmsBase: number;
   icmsRate: number;
   icmsValue: number;
@@ -119,6 +120,7 @@ export interface Invoice {
   dueDate?: string;
   pfValue?: number;
   carrierName?: string;
+  freightDueDate?: string;
   paymentDate?: string;
   paid: boolean;
   status: InvoiceStatus;
@@ -254,7 +256,19 @@ export interface AssetItem {
   plate?: string;
   registrationNumber?: string;
   situation: "Próprio" | "Alugado" | "Vendido";
-  status?: "Em uso" | "Locado" | "Empréstimo";
+  status?: "Em uso" | "Manutenção" | "Locado" | "Empréstimo";
+  miningDetails?: {
+    processNumber?: string;
+    holder?: string;
+    mineralSubstances?: string;
+    regime?: string;
+    phase?: string;
+    areaHectares?: number;
+    municipality?: string;
+    state?: string;
+    titleNumber?: string;
+    expirationDate?: string;
+  };
   notes?: string;
   archived: boolean;
   createdAt: string;

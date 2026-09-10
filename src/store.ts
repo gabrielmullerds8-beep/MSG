@@ -574,7 +574,7 @@ export function useFiscalStore() {
   const taxableReceived = received.filter(invoiceConsidersCost);
   const sum = (items: Invoice[], field: keyof Invoice) =>
     items.reduce((total, item) => total + Number(item[field] || 0), 0);
-  const cfemDue = issued
+  const cfemDue = taxableIssued
     .filter((invoice) => isCfemApplicableCfop(invoice.mainCfop))
     .reduce((total, invoice) => {
       const savedItemValue = invoice.items.reduce((sumValue, item) => sumValue + Number(item.cfemValue || 0), 0);
