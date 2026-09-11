@@ -137,7 +137,7 @@ export const getCfopRule = (cfop: string): CfopRule => {
   return fiscalConfig.cfopRules?.[code] || {};
 };
 
-const isCancelledInvoice = (invoice: Invoice) =>
+export const isCancelledInvoice = (invoice: Invoice) =>
   String(invoice.status || "").trim().toLocaleLowerCase("pt-BR") === "cancelada";
 
 export const invoiceConsidersSale = (invoice: Invoice) =>

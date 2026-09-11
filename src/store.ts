@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount, isCfemApplicableCfop } from "./data";
+import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount, isCancelledInvoice, isCfemApplicableCfop } from "./data";
 import { supabase } from "./supabase";
 import { assetToRow, cashMovementToRow, checkToRow, invoiceToRow, operationToRow, productToRow, rowToAsset, rowToCashMovement, rowToCheck, rowToInvoice, rowToOperation, rowToProduct } from "./services/supabaseMappers";
 import { AssetItem, CashMovement, CheckItem, Invoice, LinkedOperation, ProductItem } from "./types";
@@ -606,8 +606,8 @@ export function useFiscalStore() {
     received,
     revenue: taxableIssued.reduce((total, invoice) => total + invoiceFinancialAmount(invoice), 0),
     purchases: taxableReceived.reduce((total, invoice) => total + invoiceFinancialAmount(invoice), 0),
-    issuedCount: issued.length,
-    receivedCount: received.length,
+    issuedCount: issued.filter((invoice) => !isCancelledInvoice(invoice)).length,
+    receivedCount: received.filter((invoice) => !isCancelledInvoice(invoice)).length,
     icmsDebit: sum(taxableIssued, "icmsValue"),
     icmsCredit: sum(taxableReceived, "icmsCreditValue"),
     pisDebit: sum(taxableIssued, "pisValue"),
@@ -615,7 +615,7 @@ export function useFiscalStore() {
     cofinsDebit: sum(taxableIssued, "cofinsValue"),
     cofinsCredit: sum(taxableReceived, "cofinsCreditValue"),
     cfemDue,
-    canceled: invoices.filter((invoice) => invoice.status === "Cancelada").length,
+    canceled: invoices.filter(isCancelledInvoice).length,
     linkedCount: linkedOperations.length,
     soldWeight: taxableIssued.reduce(
       (total, invoice) =>
