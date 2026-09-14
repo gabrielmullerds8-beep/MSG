@@ -633,6 +633,19 @@ const billFinancialKind = (invoice: Invoice): "receivable" | "payable" | null =>
 
 const invoiceGeneratesFinancialEntries = (invoice: Invoice) =>
   !isCancelledInvoice(invoice) && Boolean(billFinancialKind(invoice) || invoiceHasFinancialEffect(invoice));
+
+const invoiceRequiresCostCenter = (invoice: Invoice) =>
+  !isCancelledInvoice(invoice) && (invoiceConsidersCost(invoice) || billFinancialKind(invoice) === "payable");
+
+const invoiceRequiresCategory = (invoice: Invoice) =>
+  !isCancelledInvoice(invoice) && (invoiceConsidersCost(invoice) || billFinancialKind(invoice) === "payable");
+
+const hasInvoiceCategory = (invoice: Invoice) => {
+  if (isNonFinancialRemittanceCfop(invoice.mainCfop)) return true;
+  if (isBillInvoice(invoice)) return Boolean(invoice.category);
+  if (invoice.items?.length) return invoice.items.every((item) => Boolean(item.category));
+  return Boolean(invoice.category);
+};
 const invoiceInstallments = (invoice: Invoice): PaymentInstallment[] =>
   invoice.financialInstallments?.length
     ? invoice.financialInstallments
@@ -1666,7 +1679,7 @@ function Dashboard({
   const monthlyChart = monthly.length ? monthly : [{ month: "Sem dados", faturamento: 0 }];
 
   const alerts = [
-    `${totals.received.filter((invoice) => invoiceConsidersCost(invoice) && !hasInvoiceCostCenter(invoice)).length} notas recebidas sem centro de custo`,
+    `${totals.received.filter((invoice) => invoiceRequiresCostCenter(invoice) && !hasInvoiceCostCenter(invoice)).length} notas recebidas sem centro de custo`,
     `${operations.filter((op) => op.status !== "Finalizada").length} triangulações abertas`,
     `CFEM do mês: ${formatCurrency(totals.cfemDue)}`,
   ];
@@ -3747,9 +3760,14 @@ type ConferenceIssue = {
 function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (invoice: Invoice) => void }) {
   const activeInvoices = invoices.filter((invoice) => !isCancelledInvoice(invoice));
   const financialInvoices = activeInvoices.filter(invoiceHasFinancialEffect);
-  const missingCostCenter: ConferenceIssue[] = financialInvoices
+  const costCenterInvoices = activeInvoices.filter(invoiceRequiresCostCenter);
+  const categoryInvoices = activeInvoices.filter(invoiceRequiresCategory);
+  const missingCostCenter: ConferenceIssue[] = costCenterInvoices
     .filter((invoice) => !hasInvoiceCostCenter(invoice))
     .map((invoice) => ({ invoice, reason: "Sem centro de custo informado" }));
+  const missingCategory: ConferenceIssue[] = categoryInvoices
+    .filter((invoice) => !hasInvoiceCategory(invoice))
+    .map((invoice) => ({ invoice, reason: "Um ou mais itens estão sem categoria" }));
   const missingCfop: ConferenceIssue[] = activeInvoices
     .filter((invoice) => !cfopIsConfigured(invoice))
     .map((invoice) => ({ invoice, reason: "CFOP ausente ou não cadastrado" }));
@@ -3761,6 +3779,7 @@ function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (in
     .map((invoice) => ({ invoice, reason: "Parcela sem portador informado" }));
   const sections = [
     { title: "Notas sem centro de custo", items: missingCostCenter, tone: "warn" as const },
+    { title: "Notas sem Categoria", items: missingCategory, tone: "warn" as const },
     { title: "Notas sem CFOP configurado", items: missingCfop, tone: "danger" as const },
     { title: "Notas sem vínculo necessário", items: missingLinks, tone: "warn" as const },
     { title: "Lançamentos sem portador", items: missingHolder, tone: "danger" as const },
@@ -3768,7 +3787,7 @@ function ConferenceView({ invoices, onOpen }: { invoices: Invoice[]; onOpen: (in
 
   return (
     <div className="view-stack">
-      <section className="stats-grid">
+      <section className="stats-grid conference-stats-grid">
         {sections.map((section) => (
           <StatCard key={section.title} title={section.title} value={String(section.items.length)} tone={section.tone} />
         ))}
@@ -4095,13 +4114,18 @@ function ClosuresView({
   const fiscalClosedAt = fiscalClosedPeriods?.[period];
   const financialClosedAt = financialClosedPeriods?.[period];
   const financialInvoices = activePeriodInvoices.filter(invoiceGeneratesFinancialEntries);
-  const pendingCostCenter = financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length;
+  const pendingCostCenter = activePeriodInvoices
+    .filter(invoiceRequiresCostCenter)
+    .filter((invoice) => !hasInvoiceCostCenter(invoice)).length;
+  const pendingCategory = activePeriodInvoices
+    .filter(invoiceRequiresCategory)
+    .filter((invoice) => !hasInvoiceCategory(invoice)).length;
   const pendingCfop = activePeriodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length;
   const pendingLinks = activePeriodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
   const pendingHolders = financialInvoices.filter((invoice) =>
     invoiceInstallments(invoice).some((installment) => !installment.holder),
   ).length;
-  const pendingTotal = pendingCostCenter + pendingCfop + pendingLinks;
+  const pendingTotal = pendingCostCenter + pendingCategory + pendingCfop + pendingLinks;
   const financialMovementCount = (targetPeriod: string) => invoices.filter(invoiceGeneratesFinancialEntries).reduce((count, invoice) => (
     count + invoiceInstallments(invoice).reduce((installmentCount, installment) => {
       const regularMovement = installment.paid && installment.paymentDate?.slice(0, 7) === targetPeriod ? 1 : 0;
@@ -4189,7 +4213,8 @@ function ClosuresView({
                 const rows = invoices.filter((invoice) => invoicePeriodKey(invoice) === item);
                 const activeRows = rows.filter((invoice) => !isCancelledInvoice(invoice));
                 const pending =
-                  activeRows.filter(invoiceHasFinancialEffect).filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+                  activeRows.filter(invoiceRequiresCostCenter).filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+                  activeRows.filter(invoiceRequiresCategory).filter((invoice) => !hasInvoiceCategory(invoice)).length +
                   activeRows.filter((invoice) => !cfopIsConfigured(invoice)).length +
                   activeRows.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
                 const fiscalItemClosedAt = fiscalClosedPeriods?.[item];
@@ -7776,9 +7801,9 @@ export default function App() {
     if (close && kind === "fiscal") {
       const periodInvoices = store.invoices.filter((invoice) => invoicePeriodKey(invoice) === period);
       const activePeriodInvoices = periodInvoices.filter((invoice) => !isCancelledInvoice(invoice));
-      const financialInvoices = activePeriodInvoices.filter(invoiceGeneratesFinancialEntries);
       const pendingCount =
-        financialInvoices.filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+        activePeriodInvoices.filter(invoiceRequiresCostCenter).filter((invoice) => !hasInvoiceCostCenter(invoice)).length +
+        activePeriodInvoices.filter(invoiceRequiresCategory).filter((invoice) => !hasInvoiceCategory(invoice)).length +
         activePeriodInvoices.filter((invoice) => !cfopIsConfigured(invoice)).length +
         activePeriodInvoices.filter((invoice) => invoiceNeedsLink(invoice) && !invoiceHasLinkReference(invoice)).length;
       if (pendingCount && !window.confirm(`Ainda existem ${pendingCount} pendência(s) fiscais na conferência de ${periodLabel(period)}. Deseja fechar mesmo assim?`)) return;

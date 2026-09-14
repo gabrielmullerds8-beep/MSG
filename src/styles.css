@@ -1053,6 +1053,10 @@ button {
   gap: 14px;
 }
 
+.conference-stats-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .conference-panel {
   min-height: 300px;
 }
