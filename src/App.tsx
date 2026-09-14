@@ -2346,6 +2346,8 @@ function InvoiceList({
 }) {
   const [query, setQuery] = useSessionState(`invoice-list:${type}:query`, "");
   const [cfop, setCfop] = useSessionState(`invoice-list:${type}:cfop`, "");
+  const [category, setCategory] = useSessionState(`invoice-list:${type}:category`, "");
+  const [costCenter, setCostCenter] = useSessionState(`invoice-list:${type}:cost-center`, "");
   const [dateStart, setDateStart] = useSessionState(`invoice-list:${type}:date-start`, "");
   const [dateEnd, setDateEnd] = useSessionState(`invoice-list:${type}:date-end`, "");
   const [linkedOnly, setLinkedOnly] = useSessionState(`invoice-list:${type}:linked-only`, false);
@@ -2365,25 +2367,31 @@ function InvoiceList({
           ? isBillInvoice(invoice)
           : invoice.mainCfop === effectiveCfop
     ))
+    .filter((invoice) => (
+      !category || invoice.category === category || invoice.items.some((item) => item.category === category)
+    ))
+    .filter((invoice) => (
+      !costCenter || invoice.costCenter === costCenter || invoice.items.some((item) => item.costCenter === costCenter)
+    ))
     .filter((invoice) => (!linkedOnly ? true : invoice.hasLinkedOperation));
 
   return (
     <div className="view-stack">
-      <div className="toolbar">
+      <div className="toolbar invoice-list-toolbar">
         <div className="filters">
-          <label className="field">
+          <label className="field invoice-search-filter">
             <span>Busca geral</span>
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Número, CNPJ, CFOP, NCM..." />
           </label>
-          <label className="field">
+          <label className="field invoice-date-filter">
             <span>Data inicial</span>
             <input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />
           </label>
-          <label className="field">
+          <label className="field invoice-date-filter">
             <span>Data final</span>
             <input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
           </label>
-          <label className="field">
+          <label className="field invoice-select-filter">
             <span>CFOP</span>
             <select value={effectiveCfop} onChange={(event) => setCfop(event.target.value)}>
               <option value="">Todos</option>
@@ -2392,6 +2400,24 @@ function InvoiceList({
                 <option key={option} value={option.split(" - ")[0]}>
                   {option}
                 </option>
+              ))}
+            </select>
+          </label>
+          <label className="field invoice-select-filter">
+            <span>Categoria</span>
+            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="">Todas</option>
+              {fiscalConfig.categories.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label className="field invoice-select-filter">
+            <span>Centro de custos</span>
+            <select value={costCenter} onChange={(event) => setCostCenter(event.target.value)}>
+              <option value="">Todos</option>
+              {fiscalConfig.costCenters.map((option) => (
+                <option key={option} value={option}>{option}</option>
               ))}
             </select>
           </label>
