@@ -465,6 +465,11 @@ button {
   min-width: 132px;
 }
 
+.dashboard-date-filter {
+  flex: 0 1 160px;
+  min-width: 145px;
+}
+
 .invoice-select-filter {
   flex: 1 1 170px;
   max-width: 225px;

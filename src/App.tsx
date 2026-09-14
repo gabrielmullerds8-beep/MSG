@@ -1634,7 +1634,26 @@ function Dashboard({
   onView: (view: View) => void;
 }) {
   const [chartBreakdown, setChartBreakdown] = useState<{ title: string; rows: TaxBreakdownRow[] } | null>(null);
-  const issuedSales = totals.issued.filter(invoiceConsidersSale);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [appliedRange, setAppliedRange] = useState({ startDate: "", endDate: "" });
+  const isDateInRange = (date: string) =>
+    (!appliedRange.startDate || date >= appliedRange.startDate)
+    && (!appliedRange.endDate || date <= appliedRange.endDate);
+  const periodInvoices = invoices.filter((invoice) => isDateInRange(invoice.issueDate));
+  const periodIssued = periodInvoices.filter((invoice) => invoice.invoiceType === "issued");
+  const periodReceived = periodInvoices.filter((invoice) => invoice.invoiceType === "received");
+  const issuedSales = periodIssued.filter(invoiceConsidersSale);
+  const receivedPurchases = periodReceived.filter(invoiceConsidersCost);
+  const periodOperations = operations.filter((operation) => isDateInRange(operation.operationDate));
+  const applyDateRange = () => {
+    if (startDate && endDate && startDate > endDate) {
+      window.alert("A data inicial não pode ser posterior à data final.");
+      return;
+    }
+    setAppliedRange({ startDate, endDate });
+    setChartBreakdown(null);
+  };
   const invoiceBreakdownRow = (invoice: Invoice, amount: number): TaxBreakdownRow => ({
     invoiceNumber: normalizeNoteNumber(invoice.invoiceNumber),
     issueDate: invoice.issueDate,
@@ -1676,21 +1695,27 @@ function Dashboard({
   ).map((item) => ({ ...item, label: chartLabel(item.name, 22) }));
   const monthly = Object.values(
     issuedSales
-      .reduce<Record<string, { month: string; faturamento: number }>>((acc, invoice) => {
+      .reduce<Record<string, { period: string; month: string; faturamento: number }>>((acc, invoice) => {
         const key = invoice.issueDate.slice(0, 7);
-        acc[key] ||= { month: `${key.slice(5, 7)}/${key.slice(0, 4)}`, faturamento: 0 };
+        acc[key] ||= { period: key, month: `${key.slice(5, 7)}/${key.slice(0, 4)}`, faturamento: 0 };
         acc[key].faturamento += chartValue(invoiceFinancialAmount(invoice));
         return acc;
       }, {}),
-  );
+  ).sort((left, right) => left.period.localeCompare(right.period));
   const customerChart = byCustomer.length ? byCustomer : [{ name: "Sem dados", label: "Sem dados", value: 0 }];
   const productChart = byProduct.length ? byProduct : [{ name: "Sem dados", label: "Sem dados", value: 0 }];
   const monthlyChart = monthly.length ? monthly : [{ month: "Sem dados", faturamento: 0 }];
 
+  const periodCfemDue = issuedSales
+    .filter((invoice) => isCfemApplicableCfop(invoice.mainCfop))
+    .reduce((total, invoice) => {
+      const itemValue = invoice.items.reduce((sum, item) => sum + Number(item.cfemValue || 0), 0);
+      return total + (itemValue || Number(invoice.cfemValue || 0));
+    }, 0);
   const alerts = [
-    `${totals.received.filter((invoice) => invoiceRequiresCostCenter(invoice) && !hasInvoiceCostCenter(invoice)).length} notas recebidas sem centro de custo`,
-    `${operations.filter((op) => op.status !== "Finalizada").length} triangulações abertas`,
-    `CFEM do mês: ${formatCurrency(totals.cfemDue)}`,
+    `${periodReceived.filter((invoice) => invoiceRequiresCostCenter(invoice) && !hasInvoiceCostCenter(invoice)).length} notas recebidas sem centro de custo`,
+    `${periodOperations.filter((op) => op.status !== "Finalizada").length} triangulações abertas`,
+    `CFEM do período: ${formatCurrency(periodCfemDue)}`,
   ];
 
   return (
@@ -1698,18 +1723,25 @@ function Dashboard({
       <div className="toolbar">
         <div className="filters">
           <Field label="Empresa" name="company" defaultValue="MSG Mineração Serra Geral Ltda" />
-          <Field label="Competência" name="period" type="month" defaultValue="2026-06" />
+          <label className="field dashboard-date-filter">
+            <span>Data inicial</span>
+            <input type="date" value={startDate} onChange={(event) => setStartDate(event.currentTarget.value)} />
+          </label>
+          <label className="field dashboard-date-filter">
+            <span>Data final</span>
+            <input type="date" value={endDate} onChange={(event) => setEndDate(event.currentTarget.value)} />
+          </label>
         </div>
-        <ActionButton icon={RefreshCw} onClick={() => window.location.reload()}>
+        <ActionButton icon={RefreshCw} onClick={applyDateRange}>
           Atualizar
         </ActionButton>
       </div>
 
       <section className="stats-grid">
-        <StatCard title="Notas emitidas" value={String(totals.issuedCount)} tone="good" />
-        <StatCard title="Faturamento bruto" value={formatCurrency(totals.revenue)} tone="good" />
-        <StatCard title="Notas recebidas" value={String(totals.receivedCount)} tone="danger" />
-        <StatCard title="Compras brutas" value={formatCurrency(totals.purchases)} tone="danger" />
+        <StatCard title="Notas emitidas" value={String(periodIssued.filter((invoice) => !isCancelledInvoice(invoice)).length)} tone="good" />
+        <StatCard title="Faturamento bruto" value={formatCurrency(issuedSales.reduce((sum, invoice) => sum + invoiceFinancialAmount(invoice), 0))} tone="good" />
+        <StatCard title="Notas recebidas" value={String(periodReceived.filter((invoice) => !isCancelledInvoice(invoice)).length)} tone="danger" />
+        <StatCard title="Compras brutas" value={formatCurrency(receivedPurchases.reduce((sum, invoice) => sum + invoiceFinancialAmount(invoice), 0))} tone="danger" />
       </section>
 
       <section className="chart-grid">
@@ -1774,10 +1806,10 @@ function Dashboard({
 
       <section className="split-grid">
         <QuickTable title="Notas Recebidas Recentes" action={() => onView("received")}>
-          <InvoiceRows invoices={totals.received.slice(0, 5)} compact />
+          <InvoiceRows invoices={periodReceived.slice(0, 5)} compact />
         </QuickTable>
         <QuickTable title="Operações Vinculadas Recentes" action={() => onView("linked")}>
-          <OperationRows operations={operations.slice(0, 5)} />
+          <OperationRows operations={periodOperations.slice(0, 5)} />
         </QuickTable>
       </section>
 
