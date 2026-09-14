@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount, isCancelledInvoice, isCfemApplicableCfop } from "./data";
+import { configuredCfemRateForDate, invoiceConsidersCost, invoiceConsidersSale, invoiceFinancialAmount, isCancelledInvoice, isCfemApplicableCfop, normalizeConfiguredTaxRate } from "./data";
 import { supabase } from "./supabase";
 import { assetToRow, cashMovementToRow, checkToRow, invoiceToRow, operationToRow, productToRow, rowToAsset, rowToCashMovement, rowToCheck, rowToInvoice, rowToOperation, rowToProduct } from "./services/supabaseMappers";
 import { AssetItem, CashMovement, CheckItem, Invoice, LinkedOperation, ProductItem } from "./types";
@@ -597,7 +597,7 @@ export function useFiscalStore() {
         );
       }, 0);
       const base = itemBase || Number(invoice.cfemBase || 0);
-      const rate = Number(invoice.cfemRate || 0) || 2;
+      const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
       return total + (base * rate) / 100;
     }, 0);
 

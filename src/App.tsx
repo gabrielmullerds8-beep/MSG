@@ -47,6 +47,7 @@ import {
   YAxis,
 } from "recharts";
 import {
+  configuredCfemRateForDate,
   fiscalConfig,
   formatCurrency,
   getCfopCode,
@@ -58,6 +59,7 @@ import {
   isCfemApplicableCfop,
   isNonFinancialRemittanceCfop,
   newId,
+  normalizeConfiguredTaxRate,
   todayIso,
 } from "./data";
 import { useFiscalStore } from "./store";
@@ -1184,11 +1186,13 @@ function PercentField({
   name,
   defaultValue = "0,00 %",
   linkedTaxValueName,
+  defaultManualOverride = false,
 }: {
   label: string;
   name: string;
   defaultValue?: string | number;
   linkedTaxValueName?: string;
+  defaultManualOverride?: boolean;
 }) {
   return (
     <label className="field">
@@ -1198,7 +1202,9 @@ function PercentField({
         defaultValue={typeof defaultValue === "number" ? formatPercentInput(String(defaultValue)) : defaultValue}
         inputMode="decimal"
         data-percent="true"
+        data-user-edited={defaultManualOverride ? "true" : undefined}
         onInput={(event) => {
+          event.currentTarget.dataset.userEdited = "true";
           event.currentTarget.dataset.taxDriver = "rate";
           const valueField = linkedTaxValueName
             ? event.currentTarget.form?.elements.namedItem(linkedTaxValueName) as HTMLInputElement | null
@@ -1234,6 +1240,7 @@ function TaxControl({
   retentionDefault,
   retentionLabel = "Retenção do imposto",
   automaticBaseValue = 0,
+  rateManualOverride = false,
 }: {
   title: string;
   enabledName: string;
@@ -1251,6 +1258,7 @@ function TaxControl({
   retentionDefault?: boolean;
   retentionLabel?: string;
   automaticBaseValue?: number;
+  rateManualOverride?: boolean;
 }) {
   const preserveInitialBase = defaultChecked
     && cleanNumber(baseValue) !== 0
@@ -1291,6 +1299,7 @@ function TaxControl({
           name={rateName}
           defaultValue={rateValue}
           linkedTaxValueName={valueName}
+          defaultManualOverride={rateManualOverride}
         />
         <MoneyField
           label={`Valor ${title}`}
@@ -2699,9 +2708,11 @@ function InvoiceForm({
         rateField: HTMLInputElement | null,
         valueField: HTMLInputElement | null,
         automaticBase = taxBase,
+        configuredRate?: number,
       ) => {
         const enabled = formData.get(`${enabledName}${suffix}`) === "on";
         const baseWasEdited = baseField?.dataset.userEdited === "true";
+        const rateWasEdited = rateField?.dataset.userEdited === "true";
         const valueWasEdited = valueField?.dataset.userEdited === "true";
         const base = enabled ? (baseWasEdited ? cleanNumber(baseField?.value || null) : automaticBase) : 0;
         if (baseField && (!baseWasEdited || !enabled)) baseField.value = formatCurrency(base);
@@ -2709,10 +2720,12 @@ function InvoiceForm({
         let rate = enabled ? cleanNumber(rateField?.value || null) : 0;
         let value = enabled ? cleanNumber(valueField?.value || null) : 0;
 
-        if (enabled && driver === "value") {
-          rate = base > 0 ? (value / base) * 100 : 0;
+        if (enabled && configuredRate !== undefined && !rateWasEdited) {
+          rate = configuredRate;
           if (rateField) rateField.value = formatPercentInput(String(rate));
-        } else {
+        }
+
+        if (enabled && driver !== "value") {
           value = enabled && base && rate ? (base * rate) / 100 : 0;
           if (valueField) valueField.value = formatCurrency(value);
         }
@@ -2734,14 +2747,21 @@ function InvoiceForm({
       freightItems += itemFreightValue;
       if (formData.get(`itemFreightIncludedInTotal${suffix}`) === "on") includedFreight += itemFreightValue;
       const taxBase = totalValue;
-      const itemIcms = updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField);
-      const itemPis = updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField);
-      const itemCofins = updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField);
+      const itemIcms = updateTaxFields("icmsEnabled", icmsBaseField, icmsRateField, icmsValueField, taxBase, 12);
+      const itemPis = updateTaxFields("pisEnabled", pisBaseField, pisRateField, pisValueField, taxBase, 1.65);
+      const itemCofins = updateTaxFields("cofinsEnabled", cofinsBaseField, cofinsRateField, cofinsValueField, taxBase, 7.6);
       updateTaxFields("ipiEnabled", ipiBaseField, ipiRateField, ipiValueField);
       updateTaxFields("ibsEnabled", ibsBaseField, ibsRateField, ibsValueField);
       updateTaxFields("cbsEnabled", cbsBaseField, cbsRateField, cbsValueField);
       const automaticCfemBase = Math.max(totalValue - itemIcms - itemPis - itemCofins, 0);
-      const itemCfem = updateTaxFields("cfemEnabled", cfemBaseField, cfemRateField, cfemValueField, automaticCfemBase);
+      const itemCfem = updateTaxFields(
+        "cfemEnabled",
+        cfemBaseField,
+        cfemRateField,
+        cfemValueField,
+        automaticCfemBase,
+        configuredCfemRateForDate(String(formData.get("issueDate") || todayIso())),
+      );
       updateTaxFields("issqnEnabled", issqnBaseField, issqnRateField, issqnValueField);
       icms += cleanNumber(icmsValueField?.value || null);
       pis += cleanNumber(pisValueField?.value || null);
@@ -2818,6 +2838,7 @@ function InvoiceForm({
     if (!canEdit) return;
     if (isEditing && !window.confirm("Tem certeza que deseja salvar as alterações deste lançamento?")) return;
     const form = new FormData(event.currentTarget);
+    const issueDate = String(form.get("issueDate") || todayIso());
     const currentDocumentModel = String(form.get("documentModel") || documentModel);
     let mainCfop = String(form.get("mainCfop") || "");
     if (currentDocumentModel === "NFS-e" && !mainCfop) mainCfop = "1933";
@@ -2879,7 +2900,12 @@ function InvoiceForm({
     const cofinsBase = items.reduce((total, item) => total + item.cofinsBase, 0);
     const cfemBase = items.reduce((total, item) => total + Number(item.cfemBase || 0), 0);
     const cfemValue = items.reduce((total, item) => total + Number(item.cfemValue || 0), 0);
-    const cfemRate = cfemBase > 0 ? (cfemValue / cfemBase) * 100 : 0;
+    const cfemRates = Array.from(new Set(
+      items
+        .filter((item) => Number(item.cfemBase || 0) > 0 || Number(item.cfemValue || 0) > 0)
+        .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(issueDate))),
+    ));
+    const cfemRate = cfemRates.length === 1 ? cfemRates[0] : 0;
     const now = new Date().toISOString();
     const hasLinkedOperation = form.get("hasLinkedOperation") === "on";
     const linkedInvoiceNumberValue = normalizeNoteNumber(String(form.get("linkedInvoiceNumber") || ""));
@@ -2905,9 +2931,9 @@ function InvoiceForm({
       invoiceNumber: normalizeNoteNumber(String(form.get("invoiceNumber") || "")),
       series: "1",
       accessKey: "",
-      issueDate: String(form.get("issueDate") || todayIso()),
-      entryDate: isReceived ? String(form.get("issueDate") || todayIso()) : undefined,
-      exitDate: !isReceived ? String(form.get("issueDate") || todayIso()) : undefined,
+      issueDate,
+      entryDate: isReceived ? issueDate : undefined,
+      exitDate: !isReceived ? issueDate : undefined,
       partyName: String(form.get("partyName") || ""),
       partyCnpj: String(form.get("partyCnpj") || ""),
       partyIe: String(form.get("partyIe") || ""),
@@ -3161,6 +3187,9 @@ function InvoiceForm({
                 ? (itemAutomaticTaxBase * Number(storedRate || 0)) / 100
                 : Number(storedValue || 0)
             );
+            const cfemConfiguredRate = configuredCfemRateForDate(editingInvoice?.issueDate || todayIso());
+            const hasManualRate = (storedRate: number | undefined, configuredRate: number) =>
+              Boolean(Number(storedRate || 0) && Math.abs(Number(storedRate) - configuredRate) > 0.01);
             return (
             <article className="item-card" key={itemIndex}>
               <div className="panel-title between">
@@ -3247,7 +3276,8 @@ function InvoiceForm({
                     baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.icmsBase))}
                     automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`icmsRate_${itemIndex}`}
-                    rateValue={existingItem?.icmsRate || (isReceived ? 12 : fiscalConfig.icmsRate)}
+                    rateValue={normalizeConfiguredTaxRate(existingItem?.icmsRate, 12)}
+                    rateManualOverride={hasManualRate(existingItem?.icmsRate, 12)}
                     valueName={`icmsValue_${itemIndex}`}
                     valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.icmsBase, existingItem?.icmsRate, existingItem?.icmsValue))}
                     creditName={`icmsCreditable_${itemIndex}`}
@@ -3262,7 +3292,8 @@ function InvoiceForm({
                     baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.pisBase))}
                     automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`pisRate_${itemIndex}`}
-                    rateValue={existingItem?.pisRate || fiscalConfig.pisRate}
+                    rateValue={normalizeConfiguredTaxRate(existingItem?.pisRate, 1.65)}
+                    rateManualOverride={hasManualRate(existingItem?.pisRate, 1.65)}
                     valueName={`pisValue_${itemIndex}`}
                     valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.pisBase, existingItem?.pisRate, existingItem?.pisValue))}
                     creditName={`pisCreditable_${itemIndex}`}
@@ -3277,7 +3308,8 @@ function InvoiceForm({
                     baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.cofinsBase))}
                     automaticBaseValue={itemAutomaticTaxBase}
                     rateName={`cofinsRate_${itemIndex}`}
-                    rateValue={existingItem?.cofinsRate || fiscalConfig.cofinsRate}
+                    rateValue={normalizeConfiguredTaxRate(existingItem?.cofinsRate, 7.6)}
+                    rateManualOverride={hasManualRate(existingItem?.cofinsRate, 7.6)}
                     valueName={`cofinsValue_${itemIndex}`}
                     valueValue={formatCurrency(normalizeStoredTaxValue(existingItem?.cofinsBase, existingItem?.cofinsRate, existingItem?.cofinsValue))}
                     creditName={`cofinsCreditable_${itemIndex}`}
@@ -3346,7 +3378,7 @@ function InvoiceForm({
                         0,
                       )}
                       rateName={`cfemRate_${itemIndex}`}
-                      rateValue={existingItem?.cfemRate || fiscalConfig.cfemRate}
+                      rateValue={cfemConfiguredRate}
                       valueName={`cfemValue_${itemIndex}`}
                       valueValue={formatCurrency(
                         normalizeStoredTaxValue(existingItem?.cfemBase, existingItem?.cfemRate, existingItem?.cfemValue),
@@ -3903,7 +3935,7 @@ function TaxView({
     const savedItemValue = invoice.items.reduce((total, item) => total + Number(item.cfemValue || 0), 0);
     if (savedItemValue > 0) return savedItemValue;
     if (Number(invoice.cfemValue || 0) > 0) return Number(invoice.cfemValue);
-    const rate = Number(invoice.cfemRate || 0) || fiscalConfig.cfemRate;
+    const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
     return (getInvoiceCfemBase(invoice) * rate) / 100;
   };
   const cfemBase = cfemInvoices.reduce((total, invoice) => total + getInvoiceCfemBase(invoice), 0);
@@ -3913,9 +3945,9 @@ function TaxView({
       cfemInvoices.flatMap((invoice) => {
         const itemRates = invoice.items
           .filter((item) => Number(item.cfemBase || 0) > 0 || Number(item.cfemValue || 0) > 0)
-          .map((item) => Number(item.cfemRate || 0))
+          .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(invoice.issueDate)))
           .filter((rate) => rate > 0);
-        const invoiceRate = Number(invoice.cfemRate || 0);
+        const invoiceRate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
         return itemRates.length ? itemRates : invoiceRate > 0 ? [invoiceRate] : [];
       }),
     ),

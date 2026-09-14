@@ -25,10 +25,17 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 button,
@@ -166,21 +173,40 @@ button {
 }
 
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
+  overflow: hidden;
   background: #f4f6f8;
 }
 
 .sidebar {
   width: 282px;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
   background: linear-gradient(180deg, #1d2a14, #0f180b);
   color: #fff;
   padding: 18px 14px;
   position: sticky;
   top: 0;
   align-self: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(255, 255, 255, 0.3) transparent;
+  scrollbar-width: thin;
   z-index: 20;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border: 2px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
 }
 
 .sidebar-brand {
@@ -256,7 +282,11 @@ button {
 
 .main {
   flex: 1;
+  height: 100vh;
+  height: 100dvh;
   min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .topbar {

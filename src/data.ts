@@ -21,7 +21,7 @@ export const fiscalConfig: FiscalConfig = {
   icmsRate: 12,
   pisRate: 1.65,
   cofinsRate: 7.6,
-  cfemRate: 2,
+  cfemRate: 1,
   bankBalance: 0,
   closedPeriods: {},
   fiscalClosedPeriods: {},
@@ -131,6 +131,14 @@ const cfemApplicableCfops = new Set(["5101", "6101", "6122", "5122"]);
 
 export const isCfemApplicableCfop = (value: string) =>
   cfemApplicableCfops.has(getCfopCode(value));
+
+export const configuredCfemRateForDate = (issueDate?: string) =>
+  issueDate && issueDate < "2026-08-01" ? 2 : 1;
+
+export const normalizeConfiguredTaxRate = (value: unknown, configuredRate: number) => {
+  const rate = Number(value || 0);
+  return !rate || Math.abs(rate - configuredRate) <= 0.01 ? configuredRate : rate;
+};
 
 export const getCfopRule = (cfop: string): CfopRule => {
   const code = getCfopCode(cfop);
