@@ -597,7 +597,7 @@ export function useFiscalStore() {
         );
       }, 0);
       const base = itemBase || Number(invoice.cfemBase || 0);
-      const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
+      const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate, invoice.mainCfop));
       return total + (base * rate) / 100;
     }, 0);
 

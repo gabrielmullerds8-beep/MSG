@@ -28,6 +28,7 @@ export const fiscalConfig: FiscalConfig = {
   financialClosedPeriods: {},
   cfops: [
     "5101 - Venda de produção do estabelecimento",
+    "7101 - Venda de produção do estabelecimento para exportação",
     "5119 - Venda a ordem",
     "5923 - Remessa por conta e ordem",
     "1102 - Compra para comercialização",
@@ -41,6 +42,7 @@ export const fiscalConfig: FiscalConfig = {
   ],
   cfopRules: {
     "5101": { considerSale: true },
+    "7101": { considerSale: true },
     "5119": { considerCost: true },
     "1102": { considerCost: true },
     "1556": { considerCost: true },
@@ -127,13 +129,13 @@ const nonFinancialRemittanceCfops = new Set(["1949", "2949", "5949", "6949"]);
 export const isNonFinancialRemittanceCfop = (value: string) =>
   nonFinancialRemittanceCfops.has(getCfopCode(value));
 
-const cfemApplicableCfops = new Set(["5101", "6101", "6122", "5122"]);
+const cfemApplicableCfops = new Set(["5101", "6101", "6122", "5122", "7101"]);
 
 export const isCfemApplicableCfop = (value: string) =>
   cfemApplicableCfops.has(getCfopCode(value));
 
-export const configuredCfemRateForDate = (issueDate?: string) =>
-  issueDate && issueDate < "2026-08-01" ? 2 : 1;
+export const configuredCfemRateForDate = (issueDate?: string, cfop?: string) =>
+  getCfopCode(cfop || "") === "7101" || !issueDate || issueDate >= "2026-08-01" ? 1 : 2;
 
 export const normalizeConfiguredTaxRate = (value: unknown, configuredRate: number) => {
   const rate = Number(value || 0);

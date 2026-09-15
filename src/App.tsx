@@ -204,7 +204,14 @@ const operationTypeOptions = [
 const assetTypeOptions = ["Máquinas", "Caminhões", "Veículos", "Escavadeiras", "Britadores", "Terrenos", "Direitos minerários", "Diversos"];
 const normalizeFiscalConfigLists = () => {
   const legacyConfig = fiscalConfig as FiscalConfig & { financialCategories?: string[] };
+  if (!fiscalConfig.cfops.some((option) => getCfopCode(option) === "7101")) {
+    fiscalConfig.cfops.push("7101 - Venda de produção do estabelecimento para exportação");
+  }
   fiscalConfig.cfops = sortConfigOptions(fiscalConfig.cfops);
+  fiscalConfig.cfopRules = {
+    ...(fiscalConfig.cfopRules || {}),
+    "7101": { ...(fiscalConfig.cfopRules?.["7101"] || {}), considerSale: true },
+  };
   fiscalConfig.csts = sortConfigOptions(fiscalConfig.csts);
   fiscalConfig.invoiceStatuses = sortConfigOptions(fiscalConfig.invoiceStatuses || invoiceStatusOptions);
   fiscalConfig.categories = sortConfigOptions([
@@ -2579,7 +2586,8 @@ function InvoiceForm({
   const isFreightDocument = isReceived && documentModel === "CT-e";
   const isNonProductDocument = isServiceReceived || isFreightDocument;
   const isSimpleRemittance = isNonFinancialRemittanceCfop(selectedMainCfop);
-  const cfemApplicable = !isReceived && isCfemApplicableCfop(selectedMainCfop);
+  const showCfem = !isReceived;
+  const cfemApplicable = showCfem && isCfemApplicableCfop(selectedMainCfop);
   const existingIssqnRetention = editingInvoice?.items?.reduce(
     (total, item) => total + (item.issqnRetained ? Number(item.issqnValue || 0) : 0),
     0,
@@ -2792,7 +2800,10 @@ function InvoiceForm({
         cfemRateField,
         cfemValueField,
         automaticCfemBase,
-        configuredCfemRateForDate(String(formData.get("issueDate") || todayIso())),
+        configuredCfemRateForDate(
+          String(formData.get("issueDate") || todayIso()),
+          String(formData.get("mainCfop") || selectedMainCfop || ""),
+        ),
       );
       updateTaxFields("issqnEnabled", issqnBaseField, issqnRateField, issqnValueField);
       icms += cleanNumber(icmsValueField?.value || null);
@@ -2935,7 +2946,7 @@ function InvoiceForm({
     const cfemRates = Array.from(new Set(
       items
         .filter((item) => Number(item.cfemBase || 0) > 0 || Number(item.cfemValue || 0) > 0)
-        .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(issueDate))),
+        .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(issueDate, mainCfop))),
     ));
     const cfemRate = cfemRates.length === 1 ? cfemRates[0] : 0;
     const now = new Date().toISOString();
@@ -3219,7 +3230,7 @@ function InvoiceForm({
                 ? (itemAutomaticTaxBase * Number(storedRate || 0)) / 100
                 : Number(storedValue || 0)
             );
-            const cfemConfiguredRate = configuredCfemRateForDate(editingInvoice?.issueDate || todayIso());
+            const cfemConfiguredRate = configuredCfemRateForDate(editingInvoice?.issueDate || todayIso(), selectedMainCfop);
             const hasManualRate = (storedRate: number | undefined, configuredRate: number) =>
               Boolean(Number(storedRate || 0) && Math.abs(Number(storedRate) - configuredRate) > 0.01);
             return (
@@ -3392,13 +3403,14 @@ function InvoiceForm({
                     creditDefault={existingItem?.cbsCreditable ?? true}
                     showCredit={isReceived}
                   />
-                  {cfemApplicable && (
+                  {showCfem && (
                     <TaxControl
+                      key={`cfem-${itemIndex}-${cfemApplicable ? "applicable" : "manual"}`}
                       title="CFEM"
                       enabledName={`cfemEnabled_${itemIndex}`}
                       defaultChecked={
                         taxIsEnabled(existingItem?.cfemBase, existingItem?.cfemValue, existingItem?.cfemRate) ||
-                        (!isEditing && cfemApplicable)
+                        cfemApplicable
                       }
                       baseName={`cfemBase_${itemIndex}`}
                       baseValue={formatCurrency(normalizeStoredTaxBase(existingItem?.cfemBase))}
@@ -3467,7 +3479,7 @@ function InvoiceForm({
           {!isNonProductDocument && <StatCard title="Total IPI" value={formatCurrency(itemTotals.ipi)} tone="warn" />}
           <StatCard title="Total IBS" value={formatCurrency(itemTotals.ibs)} tone="warn" />
           <StatCard title="Total CBS" value={formatCurrency(itemTotals.cbs)} tone="warn" />
-          {cfemApplicable && <StatCard title="Total CFEM" value={formatCurrency(itemTotals.cfem)} tone="warn" />}
+          {showCfem && <StatCard title="Total CFEM" value={formatCurrency(itemTotals.cfem)} tone="warn" />}
           {!isFreightDocument && <StatCard title="Total ISSQN" value={formatCurrency(itemTotals.issqn)} tone="warn" />}
           <StatCard title="Retenções" value={formatCurrency(itemTotals.retention)} tone="danger" />
           <StatCard title="Total líquido da nota" value={formatCurrency(itemTotals.net || itemTotals.products)} tone="good" />
@@ -3967,7 +3979,7 @@ function TaxView({
     const savedItemValue = invoice.items.reduce((total, item) => total + Number(item.cfemValue || 0), 0);
     if (savedItemValue > 0) return savedItemValue;
     if (Number(invoice.cfemValue || 0) > 0) return Number(invoice.cfemValue);
-    const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
+    const rate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate, invoice.mainCfop));
     return (getInvoiceCfemBase(invoice) * rate) / 100;
   };
   const cfemBase = cfemInvoices.reduce((total, invoice) => total + getInvoiceCfemBase(invoice), 0);
@@ -3977,9 +3989,9 @@ function TaxView({
       cfemInvoices.flatMap((invoice) => {
         const itemRates = invoice.items
           .filter((item) => Number(item.cfemBase || 0) > 0 || Number(item.cfemValue || 0) > 0)
-          .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(invoice.issueDate)))
+          .map((item) => normalizeConfiguredTaxRate(item.cfemRate, configuredCfemRateForDate(invoice.issueDate, invoice.mainCfop)))
           .filter((rate) => rate > 0);
-        const invoiceRate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate));
+        const invoiceRate = normalizeConfiguredTaxRate(invoice.cfemRate, configuredCfemRateForDate(invoice.issueDate, invoice.mainCfop));
         return itemRates.length ? itemRates : invoiceRate > 0 ? [invoiceRate] : [];
       }),
     ),
