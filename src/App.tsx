@@ -6430,7 +6430,16 @@ function AssetsView({
                   </div>
                   <details className="row-menu asset-row-menu">
                     <summary title="Ações"><MoreVertical size={16} /></summary>
-                    <button type="button" onClick={() => openView(asset)}>Visualizar</button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        const menu = event.currentTarget.closest("details");
+                        if (menu) menu.open = false;
+                        openView(asset);
+                      }}
+                    >
+                      Visualizar
+                    </button>
                   </details>
                 </article>
               ))}
@@ -6452,7 +6461,16 @@ function AssetsView({
                 </div>
                 <details className="row-menu asset-row-menu">
                   <summary title="Ações"><MoreVertical size={16} /></summary>
-                  <button type="button" onClick={() => openView(asset)}>Visualizar</button>
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      const menu = event.currentTarget.closest("details");
+                      if (menu) menu.open = false;
+                      openView(asset);
+                    }}
+                  >
+                    Visualizar
+                  </button>
                 </details>
               </article>
             ))}
