@@ -2922,6 +2922,7 @@ function InvoiceForm({
       paid: Boolean(editingInvoice?.financialInstallments?.[position]?.paid),
       paymentDate: editingInvoice?.financialInstallments?.[position]?.paymentDate || "",
       notes: editingInvoice?.financialInstallments?.[position]?.notes || "",
+      cashEffect: editingInvoice?.financialInstallments?.[position]?.cashEffect,
     }));
     const financialInstallments = rawInstallments.map((installment, index) => ({
       ...installment,
@@ -4525,6 +4526,7 @@ function FinancialView({
           discountValue,
           additionValue,
           settledValue,
+          cashEffect: true,
           holder: settlementHolder,
         });
     if (saved !== false) setSettlementEntry(null);
@@ -5562,6 +5564,7 @@ function BillFormView({
       paid: Boolean(editingBill?.financialInstallments?.[position]?.paid),
       paymentDate: editingBill?.financialInstallments?.[position]?.paymentDate || "",
       notes: editingBill?.financialInstallments?.[position]?.notes || "",
+      cashEffect: editingBill?.financialInstallments?.[position]?.cashEffect,
     }));
     const financialInstallments = rawInstallments.map((installment, index) => ({
       ...installment,
@@ -5855,7 +5858,7 @@ function CashView({
         : null;
     if (!kind) return [];
     return invoiceInstallments(invoice)
-      .filter((installment) => mode === "pf" ? Boolean(installment.pfPaid && installment.pfPaymentDate && installment.pfValue) : Boolean(installment.paid && installment.paymentDate && installment.amount))
+      .filter((installment) => mode === "pf" ? Boolean(installment.pfPaid && installment.pfPaymentDate && installment.pfValue) : Boolean(installment.paid && installment.paymentDate && installment.amount && installment.cashEffect !== false))
       .map((installment) => ({
         id: `invoice_${invoice.id}_${installment.id}`,
         source: "invoice" as const,
