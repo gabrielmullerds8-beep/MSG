@@ -86,6 +86,7 @@ export interface PaymentInstallment {
   discountValue?: number;
   additionValue?: number;
   settledValue?: number;
+  cashEffect?: boolean;
   pfPaid?: boolean;
   pfPaymentDate?: string;
   pfNotes?: string;
